@@ -1,0 +1,14 @@
+.DS_Store
+.bundle
+.rvmrc
+.idea
+coverage
+doc
+pkg
+tags
+log
+*.log
+ipaas/connector*.gem
+TODO
+stackprof.dump
+tmp/**

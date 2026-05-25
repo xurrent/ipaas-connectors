@@ -1,0 +1,19 @@
+source 'https://rubygems.org'
+gemspec
+
+group :development, :test do
+  gem 'actionpack'
+  gem 'appraisal'
+  gem 'ostruct'
+  gem 'rackup'
+  gem 'rake'
+  gem 'rspec'
+  gem 'rubocop'
+  gem 'rubocop-performance'
+  gem 'shoulda-matchers'
+  gem 'simplecov'
+  gem 'sinatra'
+  gem 'timecop'
+  gem 'webmock'
+  gem 'webrick'
+end

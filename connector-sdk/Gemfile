@@ -1,0 +1,20 @@
+source 'https://rubygems.org'
+gemspec
+
+group :development, :test do
+  gem 'actionpack'
+  gem 'appraisal'
+  gem 'rackup'
+  gem 'rake'
+  gem 'rspec'
+  gem 'rubocop'
+  gem 'rubocop-performance'
+  gem 'shoulda-matchers'
+  gem 'simplecov'
+  gem 'sinatra'
+  gem 'timecop'
+  gem 'webmock'
+  gem 'webrick'
+
+  gem 'ipaas-connector', path: '../connector'
+end

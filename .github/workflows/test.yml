@@ -1,0 +1,40 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [connector, connector-sdk]
+
+    defaults:
+      run:
+        working-directory: ${{ matrix.project }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          working-directory: ${{ matrix.project }}
+          bundler-cache: true
+
+      - name: Sync connector definitions
+        if: matrix.project == 'connector'
+        run: bundle exec rake connector:sync
+
+      - name: RSpec
+        run: bundle exec rspec
+
+      - name: RuboCop
+        run: bundle exec rubocop

@@ -1,0 +1,14 @@
+.DS_Store
+.Gemfile
+.bundle
+.rvmrc
+.idea
+coverage
+doc
+pkg
+tags
+*.log
+ipaas/connector*.gem
+TODO
+stackprof.dump
+spec/fixtures/connectors/*.rb

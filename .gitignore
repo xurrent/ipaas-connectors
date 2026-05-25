@@ -1,2 +1,21 @@
+# Bundler
+/.bundle/
+**/.bundle/
+**/vendor/bundle/
+
+# Build artefacts
+**/log/*.log
+**/log/.keep
+**/tmp/
+**/coverage/
+*.gem
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
 .DS_Store
 Thumbs.db

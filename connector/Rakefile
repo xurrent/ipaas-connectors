@@ -1,0 +1,28 @@
+require 'rubygems'
+require 'bundler'
+Bundler::GemHelper.install_tasks
+
+require 'rake'
+require 'rspec/core/rake_task'
+
+RSpec::Core::RakeTask.new(:spec)
+
+desc 'Run the specs.'
+task default: :spec
+
+task :notes do
+  system "grep -n -r 'FIXME\\|TODO' lib spec"
+end
+
+namespace :connector do
+  task :sync do
+    sdk_connectors = Dir.glob(File.join(__dir__, '../connector-sdk/spec/fixtures/*.rb'))
+
+    connectors_directory = File.join(__dir__, 'spec/fixtures/connectors')
+    FileUtils.mkdir_p(connectors_directory)
+    FileUtils.rm(Dir.glob(File.join(connectors_directory, '*.rb')))
+    sdk_connectors.each do |sdk_connector|
+      FileUtils.cp(sdk_connector, connectors_directory)
+    end
+  end
+end

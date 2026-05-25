@@ -1,0 +1,195 @@
+require:
+  - ../connector/lib/cops/unsafe_gsub_cop.rb
+
+plugins:
+  - rubocop-performance
+
+#inherit_from:
+#  - .rubocop_undecided.yml
+#<% if ENV['RUBOCOP_TODO'] != '0' %>
+#  - .rubocop_todo.yml
+#<% end %>
+
+AllCops:
+  Exclude:
+    - 'bin/**/*'
+    - 'spec/support/**/*'
+    - 'spec/lib/**/*'
+    - 'public/**/*'
+    - 'script/**/*'
+    - 'test/**/*'
+    - 'lib/**/*.rake'
+    - 'vendor/**/*'
+  TargetRubyVersion: 3.4
+  NewCops: enable
+  SuggestExtensions:
+    rubocop-capybara: false
+    rubocop-rspec: false
+    rubocop-rake: false
+
+Layout:
+  Exclude:
+    - 'db/**/*'
+
+Layout/ExtraSpacing:
+  AllowBeforeTrailingComments: true
+
+# https://www.rubydoc.info/gems/rubocop/RuboCop/Cop/Layout/FirstArrayElementIndentation
+Layout/FirstArrayElementIndentation:
+  EnforcedStyle: consistent
+
+# https://www.rubydoc.info/gems/rubocop/RuboCop/Cop/Layout/FirstHashElementIndentation
+Layout/FirstHashElementIndentation:
+  EnforcedStyle: consistent
+
+Layout/EmptyLineAfterGuardClause:
+  Enabled: false
+
+Layout/EmptyLinesAroundAttributeAccessor:
+  Enabled: false
+
+# This is ok: 'scope :for_accounts, ->(ids: nil, index_hint: nil, consider_strong_privacy_accounts: true)'
+Lint/AmbiguousBlockAssociation:
+  Enabled: false
+
+Lint/AssignmentInCondition:
+  AllowSafeAssignment: false
+
+# 'Avoid classes longer than 100 lines of code.'
+Metrics/ClassLength:
+  Enabled: false
+
+Metrics/ModuleLength:
+  Enabled: false
+
+Metrics/ParameterLists:
+  CountKeywordArgs: false
+
+Naming/BlockForwarding:
+  EnforcedStyle: explicit
+
+# https://www.rubydoc.info/gems/rubocop/RuboCop/Cop/Naming/BlockParameterName
+Naming/BlockParameterName:
+  AllowedNames:
+    - supportID
+    - employeeID
+
+Style:
+  Exclude:
+    - 'db/**/*'
+
+# Do allow non-ASCII characters in comments.
+Style/AsciiComments:
+  Enabled: false
+
+Style/CollectionMethods:
+  # Mapping from undesired method to desired_method
+  # e.g. to use `detect` over `find`:
+  #
+  # CollectionMethods:
+  #   PreferredMethods:
+  #     find: detect
+  PreferredMethods:
+    collect: 'map'
+    collect!: 'map!'
+    inject: 'reduce'
+    detect: 'detect'
+    find: 'detect'
+    find_all: 'select'
+
+# 'Document classes and non-namespace modules.'
+Style/Documentation:
+  Enabled: false
+
+# https://www.rubydoc.info/gems/rubocop/RuboCop/Cop/Style/EmptyElse
+Style/EmptyElse:
+  EnforcedStyle: empty
+
+# 'Add the frozen_string_literal comment to the top of files to help transition from Ruby 2.3.0 to Ruby 3.0.'
+Style/FrozenStringLiteralComment:
+  EnforcedStyle: never
+
+Style/HashSyntax:
+  EnforcedShorthandSyntax: never
+
+# Prefer lambda literal syntax '->()' for both single and multiline lambdas
+Style/Lambda:
+  EnforcedStyle: literal
+
+# Avoid using numbered parameters
+Style/NumberedParameters:
+  EnforcedStyle: disallow
+
+# Prefer 'x > 0' over 'x.positive?' and 'x == 0' over 'x.zero?'
+Style/NumericPredicate:
+  EnforcedStyle: comparison
+
+# 'Don't use self where it's not needed.'
+Style/RedundantSelf:
+  Enabled: false
+
+Style/SafeNavigation:
+  # Do not register an offense for method chains exceeding length of 1.
+  MaxChainLength: 1
+
+Style/StringLiterals:
+  # Valid values are: single_quotes, double_quotes
+  EnforcedStyle: single_quotes
+
+Style/SymbolArray:
+  EnforcedStyle: brackets
+
+Style/TrailingCommaInArguments:
+  Enabled: false
+
+Style/TrailingCommaInArrayLiteral:
+  EnforcedStyleForMultiline: consistent_comma
+
+Style/TrailingCommaInHashLiteral:
+  EnforcedStyleForMultiline: consistent_comma
+
+
+# Mixins are inherently complex
+Metrics/BlockLength:
+  Exclude:
+    - 'lib/ipaas/connector/dsl/**/*.rb'
+    - 'spec/**/*.rb'
+
+Metrics/MethodLength:
+  Exclude:
+    - 'lib/ipaas/connector/dsl/**/*.rb'
+    - 'spec/**/shared/*.rb'
+
+Metrics/AbcSize:
+  Exclude:
+    - 'lib/ipaas/connector/dsl/**/*.rb'
+    - 'spec/**/shared/*.rb'
+
+Metrics/CyclomaticComplexity:
+  Exclude:
+    - 'lib/ipaas/connector/dsl/**/*.rb'
+
+Metrics/PerceivedComplexity:
+  Exclude:
+    - 'lib/ipaas/connector/dsl/**/*.rb'
+
+Metrics/BlockNesting:
+  Exclude:
+    - 'lib/ipaas/connector/dsl/**/*.rb'
+
+Style/MultilineBlockChain:
+  Exclude:
+    - 'lib/ipaas/connector/dsl/**/*.rb'
+
+# Specs have some characteristics that are OK
+Lint/EmptyBlock:
+  Exclude:
+    - 'spec/**/*.rb'
+
+Lint/ConstantDefinitionInBlock:
+  Exclude:
+    - 'spec/**/*.rb'
+
+Style/ReturnNilInPredicateMethodDefinition:
+  Exclude:
+    - '**/*.rb'
