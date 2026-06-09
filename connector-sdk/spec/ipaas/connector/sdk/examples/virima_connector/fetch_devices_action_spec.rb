@@ -229,8 +229,8 @@ describe 'Virima Fetch Devices Action', :action do
   end
 
   describe 'iteration_state_schema' do
-    it 'defines offset field' do
-      expect(action.iteration_state_schema.field(:offset).type).to eq(:integer)
+    it 'defines page field' do
+      expect(action.iteration_state_schema.field(:page).type).to eq(:integer)
     end
   end
 
@@ -314,7 +314,7 @@ describe 'Virima Fetch Devices Action', :action do
     end
 
     describe 'pagination' do
-      it 'sets iteration state when more pages available' do
+      it 'advances to the next page number when a full page has more results' do
         stub_request(:post, devices_url)
           .to_return(body: {
             totalResults: 200,
@@ -323,14 +323,14 @@ describe 'Virima Fetch Devices Action', :action do
 
         expect(action(page_size: 100))
           .to receive(:iteration_state_value=)
-          .with({ offset: 100 })
+          .with({ page: 1 })
           .and_call_original
 
         output = run_action({ page_size: 100 })
         expect(output[:has_next_page]).to eq(true)
       end
 
-      it 'clears iteration state on last page' do
+      it 'clears iteration state on a short last page' do
         stub_request(:post, devices_url)
           .to_return(body: {
             totalResults: 50,
@@ -346,26 +346,42 @@ describe 'Virima Fetch Devices Action', :action do
         expect(output[:has_next_page]).to eq(false)
       end
 
-      it 'uses offset from iteration state in URL' do
-        second_page_url = "#{api_endpoint}/www_em/rest/get-records/get-all/100/100"
+      it 'uses the page number from iteration state in the URL' do
+        second_page_url = "#{api_endpoint}/www_em/rest/get-records/get-all/1/100"
         stub = stub_request(:post, second_page_url)
                .to_return(body: {
                  totalResults: 150,
                  responseList: Array.new(50) { sample_device }.to_json,
                }.to_json)
 
-        action(page_size: 100).send(:iteration_state_value=, { offset: 100 })
+        action(page_size: 100).send(:iteration_state_value=, { page: 1 })
         run_action({ page_size: 100 })
 
         expect(stub).to have_been_requested.once
       end
 
-      it 'has_next_page is false when devices count equals total' do
+      it 'has_next_page is false when a full page completes the total' do
         stub_request(:post, devices_url)
           .to_return(body: {
             totalResults: 100,
             responseList: Array.new(100) { sample_device }.to_json,
           }.to_json)
+
+        output = run_action({ page_size: 100 })
+        expect(output[:has_next_page]).to eq(false)
+      end
+
+      it 'stops on a short page even when totalResults is far larger (no infinite loop)' do
+        stub_request(:post, devices_url)
+          .to_return(body: {
+            totalResults: 7666,
+            responseList: Array.new(66) { sample_device }.to_json,
+          }.to_json)
+
+        expect(action(page_size: 100))
+          .to receive(:iteration_state_value=)
+          .with(nil)
+          .and_call_original
 
         output = run_action({ page_size: 100 })
         expect(output[:has_next_page]).to eq(false)

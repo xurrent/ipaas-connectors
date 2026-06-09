@@ -2,8 +2,13 @@ class GraphqlConnector < IPaaS::Connector::Definition
   GqlSchema = IPaaS::Job::GraphQL::Schema
   GqlQuery = IPaaS::Job::GraphQL::QueryBuilder
   GqlFields = IPaaS::Job::GraphQL::FieldBuilder
+  GqlResult = IPaaS::Job::GraphQL::Result
   Humanize = IPaaS::Job::Humanize
   CompactHash = IPaaS::Job::CompactHash
+
+  INTROSPECTION_FAILURE_TTL = 10.minutes # configuration errors cached for 10 minutes
+  INTROSPECTION_TRANSIENT_FAILURE_TTL = 30.seconds # transient errors cached for 30 seconds
+  INTROSPECTION_FAILURE_MESSAGE_LIMIT = 200 # cap on the length of the error message
 
   connector 'd5bbb2a2-4a95-4b49-b490-56711e4455f8' do
     name 'GraphQL Connector'
@@ -212,44 +217,54 @@ class GraphqlConnector < IPaaS::Connector::Definition
       avatar '/assets/icons/graphql.svg'
       nested true
 
-      input_schema do
+      # Defined before input_schema (which runs eagerly at connector load) so the
+      # helper is registered when first called. schema_data stays local to this
+      # helper and is never captured by the after_update closure (on the cached Schema).
+      helper :build_query_input_fields do |schema|
         object_name = action.input&.[](:object)
         schema_data = cache_read('gql_schema')
         query_options = schema_data.present? ? GqlSchema.gql_list_root_fields(schema_data, 'query') : []
 
         if query_options.any?
-          field :object, 'Query object', :string,
-                enumeration: query_options,
-                required: true
+          schema.field :object, 'Query object', :string,
+                       enumeration: query_options,
+                       required: true
         else
-          field :object, 'Query object', :string,
-                hint: 'The GraphQL query field name.',
-                notice: 'Configure the outbound connection to enable query object selection.',
-                pattern: /\A[A-Za-z][A-Za-z0-9]*\z/,
-                required: true
+          schema.field :object, 'Query object', :string,
+                       hint: 'The GraphQL query field name.',
+                       notice: 'Outbound Connection is not configured correctly.',
+                       notice_type: 'error',
+                       notice_action: 'edit_connection',
+                       pattern: /\A[A-Za-z][A-Za-z0-9]*\z/,
+                       required: true
         end
 
-        field :include_fields, 'Include nested fields', :nested
+        schema.field :include_fields, 'Include nested fields', :nested
 
         if schema_data.present? && object_name.present?
-          helpers.add_input_fields_from_schema_data(self, schema_data, object_name)
+          helpers.add_input_fields_from_schema_data(schema, schema_data, object_name)
         end
 
-        field :page_size, 'Page size', :integer,
-              min: 1, max: 100,
-              visibility: 'optional',
-              default: 100,
-              hint: 'Number of records to retrieve per page (1-100). Defaults to 100.'
-        field :max_results, 'Max results', :integer,
-              min: 1,
-              visibility: 'optional',
-              hint: 'Maximum total number of records to retrieve. Leave empty to retrieve all records.'
-        field :refresh_schema, 'Refresh schema', :boolean,
-              hint: 'Check to clear the cached GraphQL schema and re-fetch it. ' \
-                    'Useful after schema changes in the GraphQL API.',
-              visibility: 'optional',
-              default: false
+        schema.field :page_size, 'Page size', :integer,
+                     min: 1, max: 100,
+                     visibility: 'optional',
+                     default: 100,
+                     hint: 'Number of records to retrieve per page (1-100). Defaults to 100.'
+        schema.field :max_results, 'Max results', :integer,
+                     min: 1,
+                     visibility: 'optional',
+                     hint: 'Maximum total number of records to retrieve. Leave empty to retrieve all records.'
+        schema.field :refresh_schema, 'Refresh schema', :boolean,
+                     hint: 'Check to clear the cached GraphQL schema and re-fetch it. ' \
+                           'Useful after schema changes in the GraphQL API.',
+                     visibility: 'optional',
+                     default: false
+      end
 
+      input_schema do
+        # Built in a helper so the parsed schema_data stays local to it and is never
+        # captured by the after_update closure below (stored on the cached Schema).
+        helpers.build_query_input_fields(self)
         after_update do |_fields|
           helpers.refresh_dynamic_schemas(self, :object, 'query_result')
         end
@@ -294,10 +309,13 @@ class GraphqlConnector < IPaaS::Connector::Definition
           object_data = data[object_name]
           fail_job!("No data returned for '#{object_name}'") if object_data.blank?
 
+          # flatten nested connections so the data matches the generated schema
           if is_list
-            result[:nodes] = object_data
+            result[:nodes] = GqlResult.gql_flatten_nodes(object_data)
           elsif object_data.is_a?(Hash)
-            result.merge!(object_data)
+            # connection-shaped results route to process_connection_result,
+            # so the flattened value is still a hash here
+            result.merge!(GqlResult.gql_flatten_nodes(object_data))
           end
         end
 
@@ -467,7 +485,8 @@ class GraphqlConnector < IPaaS::Connector::Definition
 
         result[:total_count] = query_result['totalCount']
         result[:has_next_page] = iteration_state_value.present?
-        result[:nodes] = nodes
+        # flatten nested connections so the records match the generated schema
+        result[:nodes] = GqlResult.gql_flatten_nodes(nodes)
       end
 
       helper :extract_next_iteration_state_value do |query_result|
@@ -502,39 +521,49 @@ class GraphqlConnector < IPaaS::Connector::Definition
       DESC
       avatar '/assets/icons/graphql.svg'
 
-      input_schema do
+      # Defined before input_schema (which runs eagerly at connector load) so the
+      # helper is registered when first called. schema_data stays local to this
+      # helper and is never captured by the after_update closure (on the cached Schema).
+      helper :build_mutation_input_fields do |schema|
         mutation_name = action.input&.[](:mutation)
         schema_data = cache_read('gql_schema')
         mutation_options = schema_data.present? ? GqlSchema.gql_list_root_fields(schema_data, 'mutation') : []
 
         if mutation_options.any?
-          field :mutation, 'Mutation', :string,
-                enumeration: mutation_options,
-                required: true
+          schema.field :mutation, 'Mutation', :string,
+                       enumeration: mutation_options,
+                       required: true
         else
-          field :mutation, 'Mutation', :string,
-                hint: 'The GraphQL mutation name.',
-                notice: 'Configure the outbound connection to enable mutation selection.',
-                pattern: /\A[A-Za-z][A-Za-z0-9]*\z/,
-                required: true
+          schema.field :mutation, 'Mutation', :string,
+                       hint: 'The GraphQL mutation name.',
+                       notice: 'Outbound Connection is not configured correctly.',
+                       notice_type: 'error',
+                       notice_action: 'edit_connection',
+                       pattern: /\A[A-Za-z][A-Za-z0-9]*\z/,
+                       required: true
         end
 
-        field :include_fields, 'Include nested fields', :nested
+        schema.field :include_fields, 'Include nested fields', :nested
 
         if schema_data.present? && mutation_name.present?
-          helpers.add_mutation_input_fields(self, schema_data, mutation_name)
+          helpers.add_mutation_input_fields(schema, schema_data, mutation_name)
         else
-          field :input, 'Input', :hash,
-                hint: 'The mutation input variables as a JSON object.',
-                required: true
+          schema.field :input, 'Input', :hash,
+                       hint: 'The mutation input variables as a JSON object.',
+                       required: true
         end
 
-        field :refresh_schema, 'Refresh schema', :boolean,
-              hint: 'Check to clear the cached GraphQL schema and re-fetch it. ' \
-                    'Useful after schema changes in the GraphQL API.',
-              visibility: 'optional',
-              default: false
+        schema.field :refresh_schema, 'Refresh schema', :boolean,
+                     hint: 'Check to clear the cached GraphQL schema and re-fetch it. ' \
+                           'Useful after schema changes in the GraphQL API.',
+                     visibility: 'optional',
+                     default: false
+      end
 
+      input_schema do
+        # See build_query_input_fields above: building in a helper keeps schema_data
+        # out of the after_update closure's binding (which lives on the cached Schema).
+        helpers.build_mutation_input_fields(self)
         after_update do |_fields|
           helpers.refresh_dynamic_schemas(self, :mutation, 'mutation_result')
         end
@@ -563,7 +592,9 @@ class GraphqlConnector < IPaaS::Connector::Definition
           fail_job!("Mutation error: #{messages.join('; ')}") if messages.any?
         end
 
-        result = gql_output.merge!(mutation_data)
+        # flatten nested connections so the payload matches the generated schema
+        # (mutation payloads are object types, so the flattened value stays a hash)
+        result = gql_output.merge!(GqlResult.gql_flatten_nodes(mutation_data))
         [{ output: result, schema_reference: 'mutation_result' }]
       end
 
@@ -646,6 +677,7 @@ class GraphqlConnector < IPaaS::Connector::Definition
       if action.input&.[](:refresh_schema)
         cache_clear('gql_schema')
         cache_clear('_schema_present')
+        cache_clear(helpers.introspection_failure_cache_key)
       end
       begin
         helpers.ensure_schema_cached
@@ -684,11 +716,98 @@ class GraphqlConnector < IPaaS::Connector::Definition
       end
     end
 
+    # Performs the introspection HTTP call and, on failure, records a negative
+    # cache entry. The negative cache is consulted only on this path; manual
+    # schema mode makes no HTTP call and is never suppressed by a cached failure.
     helper :fetch_schema_via_introspection do
-      response = helpers.graphql_call_impl(GqlSchema::INTROSPECTION_QUERY)
+      # failures are cached to limit the number of API calls
+      cached_failure = cache_read(helpers.introspection_failure_cache_key)
+      fail_job!(cached_failure) if cached_failure.present?
+
+      response = begin
+        helpers.graphql_call_impl(GqlSchema::INTROSPECTION_QUERY)
+      rescue IPaaS::Job::RescheduleJob
+        # A backoff (429/503) is a transient signal raised upstream, not cached.
+        raise
+      rescue IPaaS::Job::Outbound::CustomerCredentialsError => e
+        # OAuth credential rejection (401/403/known-400) raises before any GraphQL
+        # response. Deterministic config failure; server's responsibility that message is credential-free.
+        helpers.record_introspection_failure(e.message, INTROSPECTION_FAILURE_TTL)
+      rescue IPaaS::Error => e
+        # Other auth errors (e.g. a 5xx from the OAuth token endpoint) are transient.
+        helpers.record_introspection_failure(e.message, INTROSPECTION_TRANSIENT_FAILURE_TTL)
+      end
+
+      if response.status != 200
+        # Bearer/api-key/no-auth connections make no token call, so a bad credential
+        # surfaces as a non-200 response. 4xx is deterministic; 5xx is transient.
+        deterministic = response.status >= 400 && response.status < 500
+        ttl = deterministic ? INTROSPECTION_FAILURE_TTL : INTROSPECTION_TRANSIENT_FAILURE_TTL
+        helpers.record_introspection_failure("HTTP error from GraphQL API: #{response.status} " \
+                                             "'#{response.body}'", ttl)
+      end
+
       schema_data = helpers.extract_data_from_graphql_response(response)['__schema']
       fail_job!('No schema data from introspection') if schema_data.blank?
       schema_data
+    end
+
+    # Writes the bounded failure message to the negative cache keyed by the auth
+    # tuple and fails the job with it. The message is capped because it is
+    # re-logged on every cache hit for the TTL; the message never contains credentials.
+    helper :record_introspection_failure do |message, ttl|
+      bounded = message.to_s[0, INTROSPECTION_FAILURE_MESSAGE_LIMIT]
+      cache_write(helpers.introspection_failure_cache_key, bounded, ttl)
+      fail_job!(bounded)
+    end
+
+    # Builds a stable, secret-safe negative-cache key from the elements that
+    # determine whether introspection is authorized for the active auth type.
+    # Secrets contribute only to the SHA256 input, never to the returned string.
+    helper :introspection_failure_cache_key do
+      config = outbound_connection.config
+      auth_type = config[:auth_type]
+      base = [
+        config[:graphql_endpoint], # the introspection target
+        auth_type,
+      ]
+      # custom headers can carry auth, so a change must re-attempt
+      tuple = base + helpers.auth_key_elements(config, auth_type) + helpers.custom_header_key_elements(config)
+      "introspection_failure_#{Digest::SHA256.hexdigest(tuple.join("\n"))}"
+    end
+
+    # The authorization determinants for the active auth type. A change to any of
+    # these must re-attempt introspection rather than reuse a cached failure.
+    helper :auth_key_elements do |config, auth_type|
+      case auth_type
+      when 'bearer_token'
+        bearer = config[:bearer_token] || {}
+        [helpers.decrypt_present(bearer[:token])]
+      when 'api_key_header'
+        api_key = config[:api_key_header] || {}
+        [api_key[:header_name], helpers.decrypt_present(api_key[:header_value])]
+      when 'oauth2'
+        oauth2 = config[:oauth2] || {}
+        [
+          oauth2[:token_endpoint], # where the client-credential token is obtained
+          oauth2[:client_id],
+          helpers.decrypt_present(oauth2[:client_secret]),
+          oauth2[:scope],
+        ]
+      else
+        [] # 'none' adds nothing beyond endpoint + auth_type
+      end
+    end
+
+    # Flattens the optional custom headers into name/value pairs for the key.
+    helper :custom_header_key_elements do |config|
+      headers = config[:custom_headers] || []
+      headers.flat_map { |header| [header[:name], header[:value]] }
+    end
+
+    # Decrypts a secret string for use in the key input, tolerating a blank value.
+    helper :decrypt_present do |secret|
+      secret.present? ? decrypt_secret_string(secret) : ''
     end
 
     helper :parse_schema_json do |json_string|

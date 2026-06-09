@@ -36,6 +36,7 @@ module IPaaS
 end
 
 require 'ipaas/connector/common/proc_rules/proc_safe'
+require 'ipaas/connector/core_ext/drill'
 require 'ipaas/connector/core_ext/method_source_patch'
 require 'ipaas/connector/dsl/boolean'
 require 'ipaas/connector/dsl/attr_accessor_mixin'

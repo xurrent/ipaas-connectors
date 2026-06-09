@@ -134,6 +134,7 @@ module IPaaS
             :[],
             :[]=,
             :dig,
+            :drill,
             :fetch,
             :key?,
             :delete,

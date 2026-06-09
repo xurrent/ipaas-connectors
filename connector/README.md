@@ -38,8 +38,9 @@ For more complete examples see the connector-SDK.
 * `outbound_connection`:
     * `authenticators`: list of supported OOTB authenticators for outbound traffic
     * `config_schema`: Configuration options as ruby block
-    * `after_create`: code to be executed when outbound connection is created
-    * `after_destroy`: code to be executed when outbound connection is destroyed
+    * `setup_info`: code returning information that helps the end-user set up the connection
+    * `provision`: code to be executed when the outbound connection is provisioned
+    * `deprovision`: code to be executed when the outbound connection is deprovisioned
     * `authenticate`: code for custom authorization of outbound traffic
 * `trigger_templates`, array of:
     * `uuid`: unique identifier
@@ -48,14 +49,16 @@ For more complete examples see the connector-SDK.
     * `description`: Markdown description
     * `config_schema`: Configuration options as ruby block
     * `output_schema`: Output schema as ruby block
-    * `after_create`: code to be executed when trigger is created
-    * `after_destroy`: code to be executed when trigger is destroyed
+    * `extract_blueprint`: code to extract the trigger's blueprint files into the blueprint store
+    * `provision`: code to be executed when the trigger is provisioned
+    * `deprovision`: code to be executed when the trigger is deprovisioned
     * `parse`: code to parse incoming request (body + headers) and returns a hash 
                conforming the output schema.
                This code may also performs additional validation on the incomonig request.
                Methods bad_request(message) and discard(message) are available.
                Bad-request will respond with a 422 and discard will respond with 200.
                In both cases the runbook will not start.
+    * `respond_with`: code to customize the response (status, body and headers) returned to the trigger's caller
 * `action_templates`, array of:
     * `uuid`: unique identifier
     * `version`: number

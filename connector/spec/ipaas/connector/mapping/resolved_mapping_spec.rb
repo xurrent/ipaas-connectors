@@ -187,6 +187,9 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
         field :date, 'Date', :date,
               min: Date.parse('2024-01-01'),
               max: Date.parse('2024-12-31')
+        field :bounded_date, 'Bounded Date', :date,
+              min_date: '2024-01-01',
+              max_date: '2024-12-31'
         field :baz, 'Baz', :string,
               enumeration: %w[FOO BAR BAZ]
         field :invisible, 'Invisible', :string,
@@ -474,6 +477,24 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
       expect(resolved.errors[:base]).to include("Field 'date' should be at most 2024-12-31.")
     end
 
+    it 'should validate min_date' do
+      resolved = resolve_restricted([{ field_id: :bounded_date, fixed: Date.parse('2023-12-31') }])
+      expect(resolved).not_to be_valid
+      expect(resolved.errors[:base]).to include("Field 'bounded_date' should be on or after 2024-01-01.")
+    end
+
+    it 'should validate max_date' do
+      resolved = resolve_restricted([{ field_id: :bounded_date, fixed: Date.parse('2025-01-01') }])
+      expect(resolved).not_to be_valid
+      expect(resolved.errors[:base]).to include("Field 'bounded_date' should be on or before 2024-12-31.")
+    end
+
+    it 'should accept a date within min_date and max_date' do
+      resolved = resolve_restricted([{ field_id: :foo, fixed: 'fixed' },
+                                     { field_id: :bounded_date, fixed: Date.parse('2024-06-15') },])
+      expect(resolved.errors[:base]).not_to include(a_string_matching(/bounded_date/))
+    end
+
     it 'should validate the ruby class' do
       resolved = resolve_restricted([{ field_id: :date, fixed: 'Foo' }])
       expect(resolved).not_to be_valid
@@ -482,6 +503,10 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
     end
 
     context 'validator' do
+      before(:each) do
+        skip_function_capture_validation
+      end
+
       it 'should validate the validator proc' do
         validator = ->(value) { value.invalid_method(environment[:foo]) }
         validator_schema = IPaaS::Connector::Schema.new('reference2') do

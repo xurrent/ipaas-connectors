@@ -191,6 +191,8 @@ describe IPaaS::Connector::Dsl::AttributeMixin do
   end
 
   it 'should mass assign function attributes' do
+    skip_function_capture_validation
+
     foo_tester = Class.new(DslTester) do
       function :foo
     end.new

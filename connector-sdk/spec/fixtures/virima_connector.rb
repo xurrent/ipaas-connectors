@@ -430,14 +430,14 @@ class VirimaConnector < IPaaS::Connector::Definition
       end
 
       iteration_state_schema do
-        field :offset, 'Offset', :integer, required: true, default: 0
+        field :page, 'Page', :integer, required: true, default: 0
       end
 
       run do
-        offset = iteration_state_value(:offset) || 0
+        page = iteration_state_value(:page) || 0
         page_size = input[:page_size]&.to_i
 
-        url = "#{helpers.api_endpoint}/www_em/rest/get-records/get-all/#{offset}/#{page_size}"
+        url = "#{helpers.api_endpoint}/www_em/rest/get-records/get-all/#{page}/#{page_size}"
         headers = { 'Content-Type': 'application/json', accept: 'application/json' }
         response = http_post(url, helpers.request_body.to_json, headers)
 
@@ -460,7 +460,7 @@ class VirimaConnector < IPaaS::Connector::Definition
           fail_job!("Failed to parse responseList: #{e.message}")
         end
 
-        has_more = (offset + devices.size) < total_results
+        has_more = devices.size == page_size && ((page * page_size) + devices.size) < total_results
 
         if input[:last_sync_at].present?
           last_sync_at = input[:last_sync_at]
@@ -471,7 +471,7 @@ class VirimaConnector < IPaaS::Connector::Definition
           end
         end
 
-        self.iteration_state_value = has_more ? { offset: offset + page_size } : nil
+        self.iteration_state_value = has_more ? { page: page + 1 } : nil
 
         [{
           output: {

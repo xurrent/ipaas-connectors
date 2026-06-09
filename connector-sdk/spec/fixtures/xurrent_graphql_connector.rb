@@ -309,16 +309,6 @@ class XurrentGraphqlConnector < IPaaS::Connector::Definition
                 hint: 'When set, authenticates with a Personal Access Token instead of OAuth2 client credentials.'
         end
 
-        # Make OAuth2 client credentials optional when a Personal Access Token is provided,
-        # since PAT takes precedence in the authenticate block.
-        after_update do |fields, new_values|
-          credentials_field = fields.detect { |f| f.id == :credentials }
-          pat_provided = new_values.dig(:credentials, :personal_access_token).present?
-          credentials_field.fields.detect { |f| f.id == :client_id }.required = !pat_provided
-          credentials_field.fields.detect { |f| f.id == :client_secret }.required = !pat_provided
-          fields
-        end
-
         env_validator = ->(value) do
           return true if value.blank?
           return true if value[:graphql_endpoint].present? && value[:oauth2_endpoint].present?
@@ -336,6 +326,16 @@ class XurrentGraphqlConnector < IPaaS::Connector::Definition
                 visibility: 'optional'
           field :graphql_endpoint, 'GraphQL Endpoint', :uri,
                 visibility: 'optional'
+        end
+
+        # Make OAuth2 client credentials optional when a Personal Access Token is provided,
+        # since PAT takes precedence in the authenticate block.
+        after_update do |fields, new_values|
+          credentials_field = fields.detect { |f| f.id == :credentials }
+          pat_provided = new_values.dig(:credentials, :personal_access_token).present?
+          credentials_field.fields.detect { |f| f.id == :client_id }.required = !pat_provided
+          credentials_field.fields.detect { |f| f.id == :client_secret }.required = !pat_provided
+          fields
         end
       end
 

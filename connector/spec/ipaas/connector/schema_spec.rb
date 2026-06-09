@@ -24,6 +24,10 @@ describe IPaaS::Connector::Schema do
   end
 
   describe 'functions' do
+    before(:each) do
+      skip_function_capture_validation
+    end
+
     [:after_update].each do |function_name|
       it "should define the #{function_name} function" do
         schema = IPaaS::Connector::Schema.new('reference')
@@ -70,6 +74,10 @@ describe IPaaS::Connector::Schema do
   end
 
   describe 'resolve' do
+    before(:each) do
+      skip_function_capture_validation
+    end
+
     it 'should resolve the schema' do
       schema.field :foo, 'Foo', :string
       values = schema.resolve(Object.new, [{ field_id: 'foo', fixed: 'Hello World!' }])

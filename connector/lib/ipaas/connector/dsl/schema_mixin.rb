@@ -82,9 +82,10 @@ module IPaaS
             # remember the original fields getter method and override with new behaviour
             alias_method(:_fields, :fields)
             define_method(:field) do |id, label = nil, type = nil, disabled: false,
-              array: false, default: nil, hint: nil, notice: nil, sample: nil, visibility: 'visible',
+              array: false, default: nil, hint: nil, notice: nil, notice_type: nil, notice_action: nil,
+              sample: nil, visibility: 'visible',
               required: false, pattern: nil,
-              min: nil, max: nil, min_length: nil, max_length: nil,
+              min: nil, max: nil, min_length: nil, max_length: nil, min_date: nil, max_date: nil,
               validator: nil, enumeration: nil, fields: nil, remove_unmapped_fields: true, &block|
 
               if id.is_a?(IPaaS::Connector::Schema::Field)

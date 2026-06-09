@@ -237,7 +237,9 @@ Security/YAMLLoad:
   Exclude:
     - 'lib/ipaas/connector/common/serializer.rb'
 
-# TrueClass and FalseClass are intentionally reopened in the same file to include Boolean
+# TrueClass and FalseClass are intentionally reopened in the same file to include Boolean;
+# Hash and Array are intentionally reopened in the same file to define #drill
 Style/OneClassPerFile:
   Exclude:
     - 'lib/ipaas/connector/dsl/boolean.rb'
+    - 'lib/ipaas/connector/core_ext/drill.rb'

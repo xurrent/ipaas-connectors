@@ -35,6 +35,10 @@ describe IPaaS::Connector::InboundConnectionTemplate do
   end
 
   describe 'functions' do
+    before(:each) do
+      skip_function_capture_validation
+    end
+
     [:validate].each do |function_name|
       it "should define the #{function_name} function" do
         expect(inbound_connection.send(function_name)).to be_nil

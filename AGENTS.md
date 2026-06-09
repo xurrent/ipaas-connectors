@@ -39,6 +39,7 @@ refreshed periodically from it.
 6. **Consistency**: Follow existing patterns and sub-project rules below.
 7. **DRY**: Avoid duplicating code or logic. Use existing patterns and abstractions whenever possible.
 8. **Naming**: Use `GraphQL` (not `Graphql`) in Ruby module/class names — it is an acronym.
+9. **Comments**: Be concise and ONLY describe why, the code itself describes what and how.
 
 ## Documentation Consistency
 When writing or updating documentation:

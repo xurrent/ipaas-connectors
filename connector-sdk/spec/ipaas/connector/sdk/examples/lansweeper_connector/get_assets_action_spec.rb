@@ -23,9 +23,9 @@ describe 'Lansweeper Get Assets Action', :action do
       end
     end
 
-    it 'should define the installation_ids field' do
-      action.input_schema.field(:installation_ids).tap do |field|
-        expect(field.label).to eq('Installation IDs')
+    it 'should define the source_ids field' do
+      action.input_schema.field(:source_ids).tap do |field|
+        expect(field.label).to eq('Source IDs')
         expect(field.type).to eq(:string)
         expect(field.array).to eq(true)
         expect(field.required).to be_falsey
@@ -153,11 +153,11 @@ describe 'Lansweeper Get Assets Action', :action do
     include_context 'lansweeper graphql'
 
     def trigger_action(site_id: 'test-site-id', import_type: 'all',
-                       installation_ids: nil, asset_types: nil, installation_handling: nil, cutoff_time: nil)
+                       source_ids: nil, asset_types: nil, source_handling: nil, cutoff_time: nil)
       input = { site_id: site_id, import_type: import_type }
-      input[:installation_ids] = installation_ids if installation_ids
+      input[:source_ids] = source_ids if source_ids
       input[:asset_types] = asset_types if asset_types
-      input[:installation_handling] = installation_handling if installation_handling
+      input[:source_handling] = source_handling if source_handling
       input[:cutoff_time] = cutoff_time if cutoff_time
       run_action(input)
     end
@@ -537,9 +537,9 @@ describe 'Lansweeper Get Assets Action', :action do
         expect(stub).to have_been_requested.once
       end
 
-      it 'filters by selected installations' do
+      it 'filters by selected sources' do
         site_id = 'test-site-id'
-        installation_ids = %w[inst-1 inst-2]
+        source_ids = %w[inst-1 inst-2]
         graphql_response = {
           data: {
             site: {
@@ -578,8 +578,8 @@ describe 'Lansweeper Get Assets Action', :action do
                .to_return(body: graphql_response.to_json)
 
         output = trigger_action(site_id: site_id,
-                                installation_ids: installation_ids,
-                                installation_handling: 'selected_only')
+                                source_ids: source_ids,
+                                source_handling: 'selected_only')
         expect(output[:assets].length).to eq(1)
         expect(stub).to have_been_requested.once
       end
@@ -696,7 +696,7 @@ describe 'Lansweeper Get Assets Action', :action do
           action(site_id: 'test-site-id').send(:iteration_state_value=, {
             next_cursor: old_cursor,
             site_id: 'test-site-id',
-            installation_ids: nil,
+            source_ids: nil,
             asset_types: nil,
             networked_assets_only: true,
             last_seen_after: (DateTime.now - 30),

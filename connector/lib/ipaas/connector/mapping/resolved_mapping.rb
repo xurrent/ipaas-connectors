@@ -219,6 +219,8 @@ module IPaaS
           validate_pattern(field, value, field_designator)
           validate_min(field, value, field_designator)
           validate_max(field, value, field_designator)
+          validate_min_date(field, value, field_designator)
+          validate_max_date(field, value, field_designator)
           validate_validator(field, value, field_designator)
           validate_enumeration(field, value, field_designator)
           validate_type_def(field, value, field_designator)
@@ -349,6 +351,26 @@ module IPaaS
           mapping_error(field, "Field '%<field>' should be at most #{field.max}.", field_designator)
         end
 
+        def validate_min_date(field, value, field_designator)
+          return unless field.min_date
+
+          date_value = value_to_date(value)
+          min = value_to_date(field.min_date)
+          return unless date_value && min && date_value < min
+
+          mapping_error(field, "Field '%<field>' should be on or after #{field.min_date}.", field_designator)
+        end
+
+        def validate_max_date(field, value, field_designator)
+          return unless field.max_date
+
+          date_value = value_to_date(value)
+          max = value_to_date(field.max_date)
+          return unless date_value && max && date_value > max
+
+          mapping_error(field, "Field '%<field>' should be on or before #{field.max_date}.", field_designator)
+        end
+
         def validate_validator(field, value, field_designator)
           return unless field.validator.present?
           return if resolve_proc(field, field.validator, [value], attribute: 'validator')
@@ -420,6 +442,15 @@ module IPaaS
           return value.to_f if value.respond_to?(:to_f)
           return value.to_i if value.respond_to?(:to_i)
           return value.to_time.to_i if value.respond_to?(:to_time) # Dates
+          nil
+        end
+
+        def value_to_date(value)
+          return if value.blank?
+          return value.to_date if value.is_a?(Date) || value.is_a?(Time)
+
+          Date.iso8601(value.to_s)
+        rescue StandardError
           nil
         end
 

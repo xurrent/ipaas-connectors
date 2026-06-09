@@ -25,6 +25,7 @@ describe IPaaS::Connector::Common::ProcRules::ValidMethodsRule do
   end
 
   [
+    :drill,
     :number_to_human_size,
     :finish_job!,
     :backoff_if_needed,

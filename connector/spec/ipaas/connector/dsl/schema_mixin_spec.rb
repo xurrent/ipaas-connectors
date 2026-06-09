@@ -194,6 +194,8 @@ describe IPaaS::Connector::Dsl::SchemaMixin do
       default: 42,
       hint: 'It is a number',
       notice: 'This is important',
+      notice_type: 'error',
+      notice_action: 'edit_connection',
       sample: 33,
       visibility: 'optional',
       required: true,

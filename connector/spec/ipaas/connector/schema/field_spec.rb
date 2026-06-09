@@ -54,6 +54,18 @@ describe IPaaS::Connector::Schema::Field do
       expect(field.notice).to eq('Configure the connection first.')
     end
 
+    it 'should define the notice_type attribute' do
+      expect(field.notice_type).to be_nil
+      field.notice_type = 'error'
+      expect(field.notice_type).to eq('error')
+    end
+
+    it 'should define the notice_action attribute' do
+      expect(field.notice_action).to be_nil
+      field.notice_action = 'edit_connection'
+      expect(field.notice_action).to eq('edit_connection')
+    end
+
     it 'should define the visibility attribute' do
       expect(field.visibility).to eq('visible')
       field.visibility = 'optional'
@@ -194,6 +206,42 @@ describe IPaaS::Connector::Schema::Field do
       end
     end
 
+    context 'notice_type' do
+      it 'should accept an allowed notice_type' do
+        field.notice_type = 'error'
+        expect(field).to be_valid
+      end
+
+      it 'should validate the notice_type' do
+        field.notice_type = 'foo'
+        expect(field).to be_invalid
+        expect(field.errors[:notice_type]).to eq(['is invalid.'])
+      end
+
+      it 'should ignore blank notice_type' do
+        field.notice_type = ''
+        expect(field).to be_valid
+      end
+    end
+
+    context 'notice_action' do
+      it 'should accept an allowed notice_action' do
+        field.notice_action = 'edit_connection'
+        expect(field).to be_valid
+      end
+
+      it 'should validate the notice_action' do
+        field.notice_action = 'foo'
+        expect(field).to be_invalid
+        expect(field.errors[:notice_action]).to eq(['is invalid.'])
+      end
+
+      it 'should ignore blank notice_action' do
+        field.notice_action = ''
+        expect(field).to be_valid
+      end
+    end
+
     context 'enumeration' do
       it 'should generate the enumeration from integers' do
         field = IPaaS::Connector::Schema::Field.new(id: :foo, label: 'Foo label', type: :integer)
@@ -209,11 +257,17 @@ describe IPaaS::Connector::Schema::Field do
                                          { id: 'Three', label: 'Three' },])
       end
 
-      it 'should restrict enumerations to string and integer types' do
+      it 'should restrict enumerations to string, integer, and time zone types' do
         field = IPaaS::Connector::Schema::Field.new(id: :foo, label: 'Foo label', type: :float)
         field.enumeration = [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }]
         expect(field).to be_invalid
-        expect(field.errors[:enumeration]).to eq(['Enumeration is restricted to string and integer types.'])
+        expect(field.errors[:enumeration]).to eq(['Enumeration is restricted to string, integer, and time zone types.'])
+      end
+
+      it 'should allow enumerations on time zone types' do
+        field = IPaaS::Connector::Schema::Field.new(id: :foo, label: 'Foo label', type: :time_zone)
+        field.enumeration = [{ id: 'UTC', label: 'UTC' }, { id: 'London', label: 'London' }]
+        expect(field).to be_valid
       end
 
       it 'should validate an id is present in each hash of the enumeration' do

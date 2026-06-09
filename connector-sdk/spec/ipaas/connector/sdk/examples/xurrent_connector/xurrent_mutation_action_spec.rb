@@ -12,6 +12,17 @@ describe 'Xurrent Mutation Action', :action do
     stub_introspection
   end
 
+  # Regression for request #78064178 (see SchemaClosureHelper).
+  describe 'memory: after_update closure does not retain the parsed schema' do
+    before(:each) { action.cache_write('gql_schema', introspection_schema, 3600) }
+
+    it 'releases schema_data so the cached after_update proc does not pin the parsed schema' do
+      schema = action.input_schema
+      expect(schema.field(:mutation).enumeration).to be_present # non-vacuous: schema was available
+      expect_after_update_not_to_retain_schema(schema)
+    end
+  end
+
   describe 'input_schema' do
     context 'without cached schema' do
       it 'defines the mutation field as a required free-text string' do
@@ -29,7 +40,9 @@ describe 'Xurrent Mutation Action', :action do
 
       it 'shows a notice prompting to configure the outbound connection' do
         field = action_template.input_schema.field(:mutation)
-        expect(field.notice).to include('outbound connection')
+        expect(field.notice).to eq('Outbound Connection is not configured correctly.')
+        expect(field.notice_type).to eq('error')
+        expect(field.notice_action).to eq('edit_connection')
       end
     end
 
@@ -312,6 +325,70 @@ describe 'Xurrent Mutation Action', :action do
 
       expect(output).to be_present
       expect(output[:request_id]).to eq('req-test-123')
+    end
+
+    # Request #78327181: nested connections lost from GraphQL result. Mutation
+    # payload objects can contain connection fields whose { nodes: [...] }
+    # layer the generated schema does not declare; it must be flattened to the
+    # array before output validation strips it.
+    context 'payload object with a nested connection (personUpdate)' do
+      let(:action_input) do
+        { mutation: 'personUpdate', input: { 'id' => 'p1', 'name' => 'Jane' },
+          include_fields: { person: true, person_fields: { skills: true } }, }
+      end
+
+      before(:each) do
+        stub_graphql_query(/personUpdate/, {
+          'personUpdate' => {
+            'person' => {
+              'id' => 'p1', 'name' => 'Jane',
+              'undeclaredField' => 'stripped by output validation',
+              'skills' => { 'nodes' => [{ 'id' => 's1', 'name' => 'Ruby' }] },
+            },
+            'errors' => [],
+          },
+        })
+      end
+
+      # Full code path: dynamic output schema generation, response JSON,
+      # parsing by run, and validation on the resolved mapping.
+      it 'flattens the nested connection in the payload object to an array of records' do
+        output = run_action(action_input)
+
+        # the undeclared field is stripped, proving the payload passed output
+        # validation — the skills array below survives that same validation
+        expect(output[:person]).not_to have_key('undeclaredField')
+        # the sibling field proves only the connection is rewritten, not the record
+        expect(output[:person]['name']).to eq('Jane')
+        expect(output[:person]['skills']).to be_an(Array)
+        expect(output[:person]['skills'].map { |s| s['name'] }).to eq(['Ruby'])
+      end
+
+      # The generated output schema declares the connection as an array of the
+      # node type without the intermediate nodes layer — the reason the
+      # response data must be flattened before validation.
+      it 'declares the nested connection as an array of records without a nodes layer' do
+        person_field = action.output_schemas.first.fields.detect { |f| f.id == :person }
+        skills_field = person_field.fields.detect { |f| f.id == :skills }
+
+        expect(skills_field.array).to be_truthy
+        expect(skills_field.fields.map(&:id)).to contain_exactly(:id, :name)
+      end
+
+      context 'when the nested connection is not included' do
+        let(:action_input) do
+          { mutation: 'personUpdate', input: { 'id' => 'p1', 'name' => 'Jane' } }
+        end
+
+        # Contrast: the response stub still contains skills, but without
+        # include_fields the schema does not declare it, so it is stripped.
+        it 'omits the nested connection from the payload object' do
+          output = run_action(action_input)
+
+          expect(output[:person]['name']).to eq('Jane')
+          expect(output[:person]).not_to have_key('skills')
+        end
+      end
     end
 
     it 'fails when mutation returns errors' do

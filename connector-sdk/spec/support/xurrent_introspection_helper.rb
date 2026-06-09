@@ -56,6 +56,8 @@ module XurrentIntrospectionHelper
         mutation_type_def,
         person_connection_type_def,
         person_type_def,
+        skill_connection_type_def,
+        skill_type_def,
         request_type_def,
         page_info_type_def,
         organization_type_def,
@@ -172,6 +174,40 @@ module XurrentIntrospectionHelper
         { 'name' => 'primaryEmail', 'description' => 'Primary email address.', 'type' => { 'kind' => 'SCALAR', 'name' => 'String', 'ofType' => nil }, 'args' => [] },
         { 'name' => 'disabled', 'description' => 'Whether the person is disabled.', 'type' => { 'kind' => 'SCALAR', 'name' => 'Boolean', 'ofType' => nil }, 'args' => [] },
         { 'name' => 'organization', 'description' => 'Organization the person belongs to.', 'type' => { 'kind' => 'OBJECT', 'name' => 'Organization', 'ofType' => nil }, 'args' => [] },
+        { 'name' => 'skills', 'description' => 'Skills of the person.', 'type' => { 'kind' => 'OBJECT', 'name' => 'SkillConnection', 'ofType' => nil }, 'args' => [] },
+      ],
+      'inputFields' => nil,
+      'enumValues' => nil,
+      'possibleTypes' => nil,
+    }
+  end
+
+  # totalCount keeps the connection type realistic (connection detection is
+  # based on the presence of a nodes field among others); the generated query
+  # selects only nodes.
+  def skill_connection_type_def
+    {
+      'kind' => 'OBJECT',
+      'name' => 'SkillConnection',
+      'description' => nil,
+      'fields' => [
+        { 'name' => 'nodes', 'description' => nil, 'type' => { 'kind' => 'LIST', 'name' => nil, 'ofType' => { 'kind' => 'OBJECT', 'name' => 'Skill', 'ofType' => nil } }, 'args' => [] },
+        { 'name' => 'totalCount', 'description' => nil, 'type' => { 'kind' => 'SCALAR', 'name' => 'Int', 'ofType' => nil }, 'args' => [] },
+      ],
+      'inputFields' => nil,
+      'enumValues' => nil,
+      'possibleTypes' => nil,
+    }
+  end
+
+  def skill_type_def
+    {
+      'kind' => 'OBJECT',
+      'name' => 'Skill',
+      'description' => nil,
+      'fields' => [
+        { 'name' => 'id', 'description' => nil, 'type' => { 'kind' => 'NON_NULL', 'name' => nil, 'ofType' => { 'kind' => 'SCALAR', 'name' => 'ID', 'ofType' => nil } }, 'args' => [] },
+        { 'name' => 'name', 'description' => nil, 'type' => { 'kind' => 'SCALAR', 'name' => 'String', 'ofType' => nil }, 'args' => [] },
       ],
       'inputFields' => nil,
       'enumValues' => nil,

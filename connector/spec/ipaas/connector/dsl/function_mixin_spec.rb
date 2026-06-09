@@ -1,6 +1,10 @@
 require 'spec_helper'
 
 describe IPaaS::Connector::Dsl::FunctionMixin do
+  before(:each) do
+    skip_function_capture_validation
+  end
+
   it 'allows function' do
     function_tester = Class.new(DslTester) do
       function :foo
@@ -9,6 +13,48 @@ describe IPaaS::Connector::Dsl::FunctionMixin do
       'Hello World!'
     end
     expect(function_tester.foo.call).to eq('Hello World!')
+  end
+
+  it 'does not allow functions to capture local variables' do
+    enable_function_capture_validation
+
+    function_tester = Class.new(DslTester) do
+      function :foo
+    end.new
+    a = 1
+
+    expect do
+      function_tester.foo do
+        'Hello World!'
+      end
+    end.to raise_error(ArgumentError, "Function 'foo' captures local variables: [:function_tester, :a].")
+
+    expect(a).to eq(1)
+  end
+
+  it 'only logs a warning for captured local variables outside the test environment' do
+    enable_function_capture_validation
+    allow(IPaaS).to receive(:env).and_return('production')
+    logger = instance_double(Logger)
+    stub_const('Rails', double(logger: logger)) # plain double since Rails is not loaded in this suite
+    allow(logger).to receive(:warn)
+
+    function_tester = Class.new(DslTester) do
+      function :foo
+    end.new
+    a = 1
+
+    expect do
+      function_tester.foo do
+        'Hello World!'
+      end
+    end.not_to raise_error
+
+    # contrast with the raising spec above: captured variables are reported in a warning instead
+    expect(logger).to have_received(:warn)
+      .with("Function 'foo' captures local variables: [:logger, :function_tester, :a].")
+    expect(function_tester.foo.call).to eq('Hello World!')
+    expect(a).to eq(1)
   end
 
   context 'validation' do

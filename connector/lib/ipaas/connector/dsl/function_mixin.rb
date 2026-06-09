@@ -7,6 +7,20 @@ module IPaaS
       module FunctionMixin
         extend ActiveSupport::Concern
 
+        class << self
+          def validate_variable_capture(name, block)
+            values = IPaaS::Connector::Common::ProcHelper.captured_variables(block)
+            # captured local variables in block: possible memory leak as these will not be garbage collected
+            return unless values.any?
+
+            message = "Function '#{name}' captures local variables: #{values.keys}."
+            # only raise in the test environment until existing runbooks no longer capture local variables
+            raise ArgumentError, message if IPaaS.env == 'test'
+
+            Rails.logger.warn(message) if defined?(Rails) && Rails.respond_to?(:logger) && Rails.logger
+          end
+        end
+
         included do
           def self.function(name, required: false)
             ivar = :"@#{name}"
@@ -14,6 +28,8 @@ module IPaaS
 
             define_method(name) do |&block|
               next instance_variable_get(ivar) unless block
+
+              IPaaS::Connector::Dsl::FunctionMixin.validate_variable_capture(name, block)
 
               instance_variable_set(ivar, block)
             end

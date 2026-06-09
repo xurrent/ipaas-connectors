@@ -84,6 +84,10 @@ describe IPaaS::Connector::TriggerTemplate do
   end
 
   describe 'functions' do
+    before(:each) do
+      skip_function_capture_validation
+    end
+
     [:extract_blueprint, :provision, :deprovision, :parse, :respond_with].each do |function_name|
       it "should define the #{function_name} function" do
         trigger_template = IPaaS::Connector::TriggerTemplate.new('uuid')
@@ -228,6 +232,10 @@ describe IPaaS::Connector::TriggerTemplate do
   end
 
   describe 'job context identifier' do
+    before(:each) do
+      skip_function_capture_validation
+    end
+
     it 'can set job context identifier during parse' do
       trigger_template = IPaaS::Connector::TriggerTemplate.new('uuid') do
         name 'Test Template'

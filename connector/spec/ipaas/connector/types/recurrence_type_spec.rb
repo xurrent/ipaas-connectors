@@ -18,6 +18,47 @@ describe IPaaS::Connector::Types::RecurrenceType do
     expect(example[:frequency]).to eq('monthly')
   end
 
+  describe 'date range validation' do
+    let(:date_schema) do
+      IPaaS::Connector::Schema.new('reference') do
+        field :rec, 'Rec', :recurrence
+      end
+    end
+
+    def recurrence_nested(start_date, end_date)
+      [
+        { field_id: :frequency, fixed: 'daily' },
+        { field_id: :time_zone, fixed: 'UTC' },
+        { field_id: :interval, fixed: 1 },
+        { field_id: :time_of_day, fixed: '09:00' },
+        { field_id: :start_date, fixed: start_date },
+        { field_id: :end_date, fixed: end_date },
+      ]
+    end
+
+    def resolve_recurrence(start_date:, end_date:)
+      mapping = [{ field_id: :rec, nested: recurrence_nested(start_date, end_date) }]
+      IPaaS::Connector::Mapping::ResolvedMapping.new(Object.new, date_schema.fields, mapping).resolve
+    end
+
+    def nested_errors(resolved, field_id)
+      rec = resolved.mapping.detect { |m| m.field_id == :rec }
+      rec.nested.detect { |n| n.field_id == field_id }.errors[:base]
+    end
+
+    it 'flags both start_date and end_date when the end date is before the start date' do
+      resolved = resolve_recurrence(start_date: '2026-06-20', end_date: '2026-06-10')
+
+      expect(resolved).not_to be_valid
+      expect(nested_errors(resolved, :start_date)).to include("Field 'start_date' should be on or before 2026-06-10.")
+      expect(nested_errors(resolved, :end_date)).to include("Field 'end_date' should be on or after 2026-06-20.")
+    end
+
+    it 'accepts a recurrence whose end date is on or after the start date' do
+      expect(resolve_recurrence(start_date: '2026-06-10', end_date: '2026-06-20')).to be_valid
+    end
+  end
+
   describe 'schema' do
     let(:schema) { subject.schema }
 
@@ -130,6 +171,43 @@ describe IPaaS::Connector::Types::RecurrenceType do
           schema.resolve(Object.new, [{ field_id: 'frequency', fixed: frequency }])
           expect(schema.fields.detect { |f| f.id == :time_of_day }.required).to be_truthy
         end
+      end
+
+      it 'bounds end_date by start_date and start_date by end_date' do
+        schema.resolve(Object.new, [
+          { field_id: 'frequency', fixed: 'daily' },
+          { field_id: 'start_date', fixed: '2026-06-10' },
+          { field_id: 'end_date', fixed: '2026-06-20' },
+        ])
+
+        expect(schema.field(:end_date).min_date).to eq('2026-06-10')
+        expect(schema.field(:start_date).max_date).to eq('2026-06-20')
+      end
+
+      it 'leaves date bounds unset when the sibling date is absent' do
+        schema.resolve(Object.new, [
+          { field_id: 'frequency', fixed: 'daily' },
+          { field_id: 'start_date', fixed: '2026-06-10' },
+        ])
+
+        expect(schema.field(:end_date).min_date).to eq('2026-06-10')
+        expect(schema.field(:start_date).max_date).to be_nil
+      end
+
+      it 'clears date bounds when the frequency is no_repeat' do
+        schema.resolve(Object.new, [
+          { field_id: 'frequency', fixed: 'daily' },
+          { field_id: 'start_date', fixed: '2026-06-10' },
+          { field_id: 'end_date', fixed: '2026-06-20' },
+        ])
+        schema.resolve(Object.new, [
+          { field_id: 'frequency', fixed: 'no_repeat' },
+          { field_id: 'start_date', fixed: '2026-06-10' },
+          { field_id: 'end_date', fixed: '2026-06-20' },
+        ])
+
+        expect(schema.field(:end_date).min_date).to be_nil
+        expect(schema.field(:start_date).max_date).to be_nil
       end
 
       def should_have_active_fields(active_field_ids)

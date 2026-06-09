@@ -80,6 +80,10 @@ describe IPaaS::Connector::ActionTemplate do
   end
 
   describe 'functions' do
+    before(:each) do
+      skip_function_capture_validation
+    end
+
     [:run].each do |function_name|
       it "should define the #{function_name} function" do
         action_template = IPaaS::Connector::ActionTemplate.new('uuid')
@@ -189,6 +193,10 @@ describe IPaaS::Connector::ActionTemplate do
   end
 
   describe 'job context identifier' do
+    before(:each) do
+      skip_function_capture_validation
+    end
+
     it 'can set job context identifier during run' do
       action_template = IPaaS::Connector::ActionTemplate.new('uuid') do
         run do

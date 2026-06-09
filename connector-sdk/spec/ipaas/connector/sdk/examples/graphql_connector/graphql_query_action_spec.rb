@@ -26,6 +26,17 @@ describe 'GraphQL Query Action', :action do
     stub_graphql_connector_introspection
   end
 
+  # Regression for request #78064178 (see SchemaClosureHelper).
+  describe 'memory: after_update closure does not retain the parsed schema' do
+    before(:each) { action.cache_write('gql_schema', graphql_connector_introspection_schema, 3600) }
+
+    it 'releases schema_data so the cached after_update proc does not pin the parsed schema' do
+      schema = action.input_schema
+      expect(schema.field(:object).enumeration).to be_present # non-vacuous: schema was available
+      expect_after_update_not_to_retain_schema(schema)
+    end
+  end
+
   describe 'input_schema' do
     it 'defines the object field as required string' do
       field = action.input_schema.field(:object)

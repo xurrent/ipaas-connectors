@@ -6,12 +6,17 @@ module IPaaS
 
         proc_safe :type, :'type=', :array, :'array=', :disabled, :'disabled=',
                   :label, :'label=', :hint, :'hint=', :required, :'required=',
-                  :visibility, :'visibility=', :enumeration, :'enumeration=', :fields
+                  :visibility, :'visibility=', :enumeration, :'enumeration=', :fields,
+                  :min_date, :'min_date=', :max_date, :'max_date='
 
         ANY_TYPE_PATTERN = /\Aany_[a-z_]+_type\z/
+        ENUMERABLE_TYPES = [:string, :integer, :time_zone].freeze
+        NOTICE_TYPES = %w[info error].freeze
+        NOTICE_ACTIONS = %w[edit_connection].freeze
         SERIALIZABLE_ATTRS = [
-          :id, :label, :type, :disabled, :array, :default, :sample, :hint, :notice, :visibility, :required,
-          :pattern, :min, :max, :min_length, :max_length, :enumeration, :fields, :remove_unmapped_fields,
+          :id, :label, :type, :disabled, :array, :default, :sample, :hint, :notice, :notice_type, :notice_action,
+          :visibility, :required, :pattern, :min, :max, :min_length, :max_length, :min_date, :max_date, :enumeration,
+          :fields, :remove_unmapped_fields,
         ].freeze
 
         include IPaaS::Connector::Common::Model
@@ -26,6 +31,8 @@ module IPaaS
         attribute :sample, type: -> { self.array ? [type_def.ruby_class] : type_def.ruby_class }
         attribute :hint
         attribute :notice
+        attribute :notice_type, type: String
+        attribute :notice_action, type: String
         attribute :visibility, type: String, default: 'visible'
         attribute :required, type: Boolean
         attribute :pattern, type: Regexp
@@ -33,6 +40,8 @@ module IPaaS
         attribute :max, type: Integer
         attribute :min_length, type: Integer
         attribute :max_length, type: Integer
+        attribute :min_date, type: String
+        attribute :max_date, type: String
         attribute :enumeration, type: [Hash]
         attribute :remove_unmapped_fields, type: Boolean, default: true
 
@@ -52,6 +61,8 @@ module IPaaS
 
         validate :enumeration_valid?
         validate :visibility_valid?
+        validate :notice_type_valid?
+        validate :notice_action_valid?
         validate :type_valid?
         validate :fields_valid?
         validate :pattern_valid?
@@ -153,7 +164,7 @@ module IPaaS
         def parse_enumeration
           return unless self.enumeration&.first.present?
           return if self.enumeration.first.is_a?(Hash)
-          return unless self.type.in?([:string, :integer])
+          return unless self.type.in?(ENUMERABLE_TYPES)
 
           self.enumeration = enumeration.map { |val| { id: val, label: val.to_s } }
         end
@@ -161,8 +172,8 @@ module IPaaS
         def enumeration_valid?
           return if self.enumeration.blank? || errors[:enumeration].any?
 
-          unless self.type.in?([:string, :integer])
-            errors.add(:enumeration, 'Enumeration is restricted to string and integer types.')
+          unless self.type.in?(ENUMERABLE_TYPES)
+            errors.add(:enumeration, 'Enumeration is restricted to string, integer, and time zone types.')
           end
 
           return if enumeration.all? { |value| valid_enum_value?(value) }
@@ -191,6 +202,20 @@ module IPaaS
 
           return if %w[visible optional hidden].include?(self.visibility)
           errors.add(:visibility, 'is invalid.')
+        end
+
+        def notice_type_valid?
+          return if self.notice_type.blank?
+
+          return if NOTICE_TYPES.include?(self.notice_type)
+          errors.add(:notice_type, 'is invalid.')
+        end
+
+        def notice_action_valid?
+          return if self.notice_action.blank?
+
+          return if NOTICE_ACTIONS.include?(self.notice_action)
+          errors.add(:notice_action, 'is invalid.')
         end
 
         def valid_enum_value?(value)

@@ -12,6 +12,28 @@ describe 'Xurrent Query Action', :action do
     stub_introspection
   end
 
+  # Regression for request #78064178: the input_schema's after_update proc is
+  # defined in the same block scope as the `schema_data = cache_read(...)` local,
+  # so the long-lived proc (stored on the cached Schema) would otherwise capture
+  # the multi-MB parsed gql_schema per cached solution version and OOM the GUI.
+  describe 'memory: after_update closure does not retain the parsed schema' do
+    before(:each) { action.cache_write('gql_schema', introspection_schema, 3600) }
+
+    it 'releases schema_data so the cached after_update proc does not pin the parsed schema' do
+      schema = action.input_schema
+      # Sanity: the schema WAS available while the block ran (so without the fix
+      # the closure would have captured a non-nil schema_data) — this keeps the
+      # assertion below from passing vacuously.
+      expect(schema.field(:object).enumeration)
+        .to contain_exactly(
+          { id: 'people', label: 'People' },
+          { id: 'me', label: 'Me' },
+        )
+
+      expect_after_update_not_to_retain_schema(schema)
+    end
+  end
+
   describe 'input_schema' do
     describe 'base fields (no object selected)' do
       it 'defines the object field as required string' do
@@ -94,7 +116,9 @@ describe 'Xurrent Query Action', :action do
           # Use action_template.input_schema directly to test the schema before after_update
           # caches the GraphQL schema via introspection
           field = action_template.input_schema.field(:object)
-          expect(field.notice).to include('outbound connection')
+          expect(field.notice).to eq('Outbound Connection is not configured correctly.')
+          expect(field.notice_type).to eq('error')
+          expect(field.notice_action).to eq('edit_connection')
         end
       end
     end
@@ -487,6 +511,105 @@ describe 'Xurrent Query Action', :action do
         state = action_instance.send(:iteration_state_value)
         expect(state).to be_present
         expect(state).not_to have_key('fetched_count')
+      end
+    end
+
+    # Request #78327181: nested connections lost from GraphQL result. The
+    # response nests connection content below a 'nodes' layer (person ->
+    # skills -> nodes -> [skill]) that the generated schema does not declare
+    # (the connection field is an array of the node type), so it must be
+    # flattened to the array before output validation strips it.
+    context 'connection query with a nested connection (skills)' do
+      let(:action_input) { { object: 'people', page_size: 25, include_fields: { skills: true } } }
+
+      before(:each) do
+        stub_graphql_query(/people/, {
+          'people' => {
+            'totalCount' => 1,
+            'pageInfo' => { 'hasNextPage' => false, 'endCursor' => nil },
+            'nodes' => [
+              {
+                'id' => 'p1', 'name' => 'John Doe',
+                'undeclaredField' => 'stripped by output validation',
+                'skills' => { 'nodes' => [{ 'id' => 's1', 'name' => 'Ruby' }, { 'id' => 's2', 'name' => 'GraphQL' }] },
+              },
+            ],
+          },
+        })
+      end
+
+      # Full code path: dynamic output schema generation, response JSON,
+      # parsing by run, and validation on the resolved mapping.
+      it 'flattens the nested connection in each record to an array of records' do
+        output = run_action(action_input, schema_reference: 'query_result')
+
+        record = output[:nodes].first
+        # the undeclared field is stripped, proving the record passed output
+        # validation — the skills array below survives that same validation
+        expect(record).not_to have_key('undeclaredField')
+        # the sibling field proves only the connection is rewritten, not the record
+        expect(record['name']).to eq('John Doe')
+        expect(record['skills']).to be_an(Array)
+        expect(record['skills'].map { |s| s['name'] }).to eq(%w[Ruby GraphQL])
+      end
+
+      # The generated output schema declares the connection as an array of the
+      # node type without the intermediate nodes layer — the reason the
+      # response data must be flattened before validation.
+      it 'declares the nested connection as an array of records without a nodes layer' do
+        nodes_field = action.output_schemas.first.fields.detect { |f| f.id == :nodes }
+        skills_field = nodes_field.fields.detect { |f| f.id == :skills }
+
+        expect(skills_field.array).to be_truthy
+        expect(skills_field.fields.map(&:id)).to contain_exactly(:id, :name)
+      end
+
+      context 'when the nested connection is not included' do
+        let(:action_input) { { object: 'people', page_size: 25 } }
+
+        # Contrast: the response stub still contains skills, but without
+        # include_fields the schema does not declare it, so it is stripped.
+        it 'omits the nested connection from the output' do
+          output = run_action(action_input, schema_reference: 'query_result')
+
+          expect(output[:nodes].first['name']).to eq('John Doe')
+          expect(output[:nodes].first).not_to have_key('skills')
+        end
+      end
+    end
+
+    context 'single object query with a nested connection (me)' do
+      let(:action_input) { { object: 'me', page_size: 100, include_fields: { skills: true } } }
+
+      before(:each) do
+        stub_graphql_query(/me/, {
+          'me' => {
+            'id' => 'p1', 'name' => 'Current User',
+            'skills' => { 'nodes' => [{ 'id' => 's1', 'name' => 'Ruby' }] },
+          },
+        })
+      end
+
+      it 'flattens the nested connection in the object result to an array of records' do
+        output = run_action(action_input, schema_reference: 'query_result')
+
+        # the sibling field proves only the connection is rewritten, not the record
+        expect(output[:name]).to eq('Current User')
+        expect(output[:skills]).to be_an(Array)
+        expect(output[:skills].map { |s| s['name'] }).to eq(['Ruby'])
+      end
+
+      context 'when the nested connection is not included' do
+        let(:action_input) { { object: 'me', page_size: 100 } }
+
+        # Contrast: the response stub still contains skills, but without
+        # include_fields the schema does not declare it, so it is stripped.
+        it 'omits the nested connection from the output' do
+          output = run_action(action_input, schema_reference: 'query_result')
+
+          expect(output[:name]).to eq('Current User')
+          expect(output).not_to have_key(:skills)
+        end
       end
     end
 

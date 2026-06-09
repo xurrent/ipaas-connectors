@@ -954,6 +954,8 @@ describe IPaaS::Connector::Action do
     end
 
     it 'iteration state can be set' do
+      skip_function_capture_validation
+
       IPaaS::Connector::Connector.new('uniquest-connector-id') do
         action 'unique-action-id' do
           name 'Foo'

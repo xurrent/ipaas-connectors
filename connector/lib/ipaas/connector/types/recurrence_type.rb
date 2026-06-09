@@ -15,6 +15,11 @@ module IPaaS
             true
           end
 
+          # The end-date-on-or-after-start-date constraint is enforced per field via the
+          # min_date/max_date bounds set in after_update (validated server-side by
+          # ResolvedMapping#validate_min_date/#validate_max_date), so errors attach to the
+          # specific start_date/end_date fields rather than the whole recurrence value.
+
           def example(field)
             fields_example(field.fields)
           end
@@ -39,7 +44,8 @@ module IPaaS
 
               field :time_zone, 'Time Zone', :time_zone,
                     required: true,
-                    sample: 'UTC'
+                    sample: 'UTC',
+                    enumeration: IPaaS::Connector::Types::TimeZoneType::ZONES_BY_NAME.keys.sort.map { |name| { id: name, label: name } }
 
               field :interval, 'Interval', :integer,
                     required: true,
@@ -149,6 +155,14 @@ module IPaaS
                     active_fields += [:day_of_week_index, :day_of_week_day] if values[:day_of_week]
                   when 'no_repeat'
                     active_fields = [:disabled, :frequency]
+                  end
+
+                  start_date = fields.detect { |f| f.id == :start_date }
+                  end_date = fields.detect { |f| f.id == :end_date }
+                  if start_date && end_date
+                    no_repeat = values[:frequency] == 'no_repeat'
+                    end_date.min_date = !no_repeat && values[:start_date].present? ? values[:start_date].to_s : nil
+                    start_date.max_date = !no_repeat && values[:end_date].present? ? values[:end_date].to_s : nil
                   end
                 end
 

@@ -2,10 +2,15 @@ class XurrentConnector < IPaaS::Connector::Definition
   GqlSchema = IPaaS::Job::GraphQL::Schema
   GqlQuery = IPaaS::Job::GraphQL::QueryBuilder
   GqlFields = IPaaS::Job::GraphQL::FieldBuilder
+  GqlResult = IPaaS::Job::GraphQL::Result
   Humanize = IPaaS::Job::Humanize
   CompactHash = IPaaS::Job::CompactHash
 
   MAX_WEBHOOK_BODY_BYTES = 256 * 1024
+
+  INTROSPECTION_FAILURE_TTL = 10.minutes # configuration errors cached for 10 minutes
+  INTROSPECTION_TRANSIENT_FAILURE_TTL = 30.seconds # transient errors cached for 30 seconds
+  INTROSPECTION_FAILURE_MESSAGE_LIMIT = 200 # cap on the length of the error message
 
   connector '01930641-94f0-7d88-941f-cd0f542b75b9' do
     name 'Xurrent Connector'
@@ -603,46 +608,58 @@ class XurrentConnector < IPaaS::Connector::Definition
       avatar '/assets/icons/x-logo-graphql.svg'
       nested true
 
-      input_schema do
+      # Builds every query input field. Defined before input_schema (which runs
+      # eagerly at connector load) so the helper is registered when first called.
+      # schema_data lives only in this helper's frame, so the input_schema block's
+      # after_update closure never captures it — capturing it would pin the multi-MB
+      # parsed gql_schema on the cached Schema per solution version (GUI OOM).
+      helper :build_query_input_fields do |schema|
         object_name = action.input&.[](:object)
         schema_data = cache_read('gql_schema')
         query_options = schema_data.present? ? GqlSchema.gql_list_root_fields(schema_data, 'query') : []
 
         if query_options.any?
-          field :object, 'Query object', :string,
-                enumeration: query_options,
-                required: true
+          schema.field :object, 'Query object', :string,
+                       enumeration: query_options,
+                       required: true
         else
-          field :object, 'Query object', :string,
-                hint: 'The GraphQL query field name (e.g. people, requests, configurationItems).',
-                notice: 'Configure the outbound connection to enable query object selection.',
-                pattern: /\A[A-Za-z][A-Za-z0-9]*\z/,
-                required: true
+          schema.field :object, 'Query object', :string,
+                       hint: 'The GraphQL query field name (e.g. people, requests, configurationItems).',
+                       notice: 'Outbound Connection is not configured correctly.',
+                       notice_type: 'error',
+                       notice_action: 'edit_connection',
+                       pattern: /\A[A-Za-z][A-Za-z0-9]*\z/,
+                       required: true
         end
 
         # Define include_fields early so its value is resolved in the first pass,
         # making it available in action.input when after_update regenerates the output schema.
-        field :include_fields, 'Include nested fields', :nested
+        schema.field :include_fields, 'Include nested fields', :nested
 
         if schema_data.present? && object_name.present?
-          helpers.add_input_fields_from_schema_data(self, schema_data, object_name)
+          helpers.add_input_fields_from_schema_data(schema, schema_data, object_name)
         end
 
-        field :page_size, 'Page size', :integer,
-              min: 1, max: 100,
-              visibility: 'optional',
-              default: 100,
-              hint: 'Number of records to retrieve per page (1-100). Defaults to 100.'
-        field :max_results, 'Max results', :integer,
-              min: 1,
-              visibility: 'optional',
-              hint: 'Maximum total number of records to retrieve. Leave empty to retrieve all records.'
-        field :refresh_schema, 'Refresh schema', :boolean,
-              hint: 'Check to clear the cached GraphQL schema and re-fetch it from Xurrent. ' \
-                    'Useful after schema changes in the Xurrent environment.',
-              visibility: 'optional',
-              default: false
+        schema.field :page_size, 'Page size', :integer,
+                     min: 1, max: 100,
+                     visibility: 'optional',
+                     default: 100,
+                     hint: 'Number of records to retrieve per page (1-100). Defaults to 100.'
+        schema.field :max_results, 'Max results', :integer,
+                     min: 1,
+                     visibility: 'optional',
+                     hint: 'Maximum total number of records to retrieve. Leave empty to retrieve all records.'
+        schema.field :refresh_schema, 'Refresh schema', :boolean,
+                     hint: 'Check to clear the cached GraphQL schema and re-fetch it from Xurrent. ' \
+                           'Useful after schema changes in the Xurrent environment.',
+                     visibility: 'optional',
+                     default: false
+      end
 
+      input_schema do
+        # Built in a helper so schema_data stays out of this block's binding and is
+        # never captured by the after_update closure below (stored on the cached Schema).
+        helpers.build_query_input_fields(self)
         after_update do |_fields|
           helpers.refresh_dynamic_schemas(self, :object, 'query_result')
         end
@@ -698,7 +715,10 @@ class XurrentConnector < IPaaS::Connector::Definition
         else
           object_data = data[object_name]
           fail_job!("No data returned for '#{object_name}'") if object_data.blank?
-          result.merge!(object_data) if object_data.is_a?(Hash)
+          # Flatten nested connection { nodes => [...] } layers to the arrays
+          # declared by the generated schema (connection-shaped results route
+          # to process_connection_result, so the flattened value is still a hash here).
+          result.merge!(GqlResult.gql_flatten_nodes(object_data)) if object_data.is_a?(Hash)
         end
 
         [{ output: result, schema_reference: 'query_result' }]
@@ -866,7 +886,10 @@ class XurrentConnector < IPaaS::Connector::Definition
 
         result[:total_count] = query_result['totalCount']
         result[:has_next_page] = iteration_state_value.present?
-        result[:nodes] = nodes
+        # Flatten nested connection { nodes => [...] } layers inside the records
+        # to the arrays declared by the generated schema; the top-level nodes
+        # layer was already unwrapped above.
+        result[:nodes] = GqlResult.gql_flatten_nodes(nodes)
       end
 
       helper :extract_next_iteration_state_value do |query_result|
@@ -901,40 +924,51 @@ class XurrentConnector < IPaaS::Connector::Definition
       DESC
       avatar '/assets/icons/x-logo-graphql.svg'
 
-      input_schema do
+      # Defined before input_schema (which runs eagerly at connector load) so the
+      # helper is registered when first called. schema_data stays local to this
+      # helper and is never captured by the after_update closure (which lives on
+      # the cached Schema) — see build_query_input_fields above.
+      helper :build_mutation_input_fields do |schema|
         mutation_name = action.input&.[](:mutation)
         schema_data = cache_read('gql_schema')
         mutation_options = schema_data.present? ? GqlSchema.gql_list_root_fields(schema_data, 'mutation') : []
 
         if mutation_options.any?
-          field :mutation, 'Mutation', :string,
-                enumeration: mutation_options,
-                required: true
+          schema.field :mutation, 'Mutation', :string,
+                       enumeration: mutation_options,
+                       required: true
         else
-          field :mutation, 'Mutation', :string,
-                hint: 'The GraphQL mutation name (e.g. requestCreate, personUpdate, noteCreate).',
-                notice: 'Configure the outbound connection to enable mutation selection.',
-                pattern: /\A[A-Za-z][A-Za-z0-9]*\z/,
-                required: true
+          schema.field :mutation, 'Mutation', :string,
+                       hint: 'The GraphQL mutation name (e.g. requestCreate, personUpdate, noteCreate).',
+                       notice: 'Outbound Connection is not configured correctly.',
+                       notice_type: 'error',
+                       notice_action: 'edit_connection',
+                       pattern: /\A[A-Za-z][A-Za-z0-9]*\z/,
+                       required: true
         end
 
         # Define include_fields early so its value is resolved in the first pass
-        field :include_fields, 'Include nested fields', :nested
+        schema.field :include_fields, 'Include nested fields', :nested
 
         if schema_data.present? && mutation_name.present?
-          helpers.add_mutation_input_fields(self, schema_data, mutation_name)
+          helpers.add_mutation_input_fields(schema, schema_data, mutation_name)
         else
-          field :input, 'Input', :hash,
-                hint: 'The mutation input variables as a JSON object.',
-                required: true
+          schema.field :input, 'Input', :hash,
+                       hint: 'The mutation input variables as a JSON object.',
+                       required: true
         end
 
-        field :refresh_schema, 'Refresh schema', :boolean,
-              hint: 'Check to clear the cached GraphQL schema and re-fetch it from Xurrent. ' \
-                    'Useful after schema changes in the Xurrent environment.',
-              visibility: 'optional',
-              default: false
+        schema.field :refresh_schema, 'Refresh schema', :boolean,
+                     hint: 'Check to clear the cached GraphQL schema and re-fetch it from Xurrent. ' \
+                           'Useful after schema changes in the Xurrent environment.',
+                     visibility: 'optional',
+                     default: false
+      end
 
+      input_schema do
+        # See build_query_input_fields above: building in a helper keeps schema_data
+        # out of the after_update closure's binding (which lives on the cached Schema).
+        helpers.build_mutation_input_fields(self)
         after_update do |_fields|
           helpers.refresh_dynamic_schemas(self, :mutation, 'mutation_result')
         end
@@ -977,7 +1011,10 @@ class XurrentConnector < IPaaS::Connector::Definition
           fail_job!("Mutation error: #{messages.join('; ')}") if messages.any?
         end
 
-        result = gql_output.merge!(mutation_data)
+        # Flatten nested connection { nodes => [...] } layers to the arrays
+        # declared by the generated schema (mutation payloads are object
+        # types, so the flattened value stays a hash).
+        result = gql_output.merge!(GqlResult.gql_flatten_nodes(mutation_data))
         [{ output: result, schema_reference: 'mutation_result' }]
       end
 
@@ -1189,6 +1226,7 @@ class XurrentConnector < IPaaS::Connector::Definition
       if action.input&.[](:refresh_schema)
         cache_clear('gql_schema')
         cache_clear('_schema_present')
+        cache_clear(helpers.introspection_failure_cache_key)
       end
       begin
         helpers.ensure_schema_cached
@@ -1212,13 +1250,71 @@ class XurrentConnector < IPaaS::Connector::Definition
         next cached
       end
 
-      response = helpers.graphql_call_impl(IPaaS::Job::GraphQL::Schema::INTROSPECTION_QUERY)
-      schema_data = helpers.extract_data_from_graphql_response(response)['__schema']
+      # failures are cached to limit the number of API calls
+      cached_failure = cache_read(helpers.introspection_failure_cache_key)
+      fail_job!(cached_failure) if cached_failure.present?
+
+      schema_data = helpers.fetch_introspection_schema
       fail_job!('No schema data from introspection') if schema_data.blank?
 
       cache_write('gql_schema', schema_data, 3600)
       cache_write('_schema_present', true, 3600)
       schema_data
+    end
+
+    # Performs the introspection HTTP call and, on failure, records a negative
+    # cache entry.
+    helper :fetch_introspection_schema do
+      response = begin
+        helpers.graphql_call_impl(IPaaS::Job::GraphQL::Schema::INTROSPECTION_QUERY)
+      rescue IPaaS::Job::RescheduleJob
+        # A backoff (429/503) is a transient signal raised upstream, not cached.
+        raise
+      rescue IPaaS::Job::Outbound::CustomerCredentialsError => e
+        # OAuth credential rejection (401/403/known-400) raises before any GraphQL
+        # response. Deterministic config failure; message is credential-free.
+        helpers.record_introspection_failure(e.message, INTROSPECTION_FAILURE_TTL)
+      rescue IPaaS::Error => e
+        # Other auth errors (e.g. a 5xx from the OAuth token endpoint) are transient.
+        helpers.record_introspection_failure(e.message, INTROSPECTION_TRANSIENT_FAILURE_TTL)
+      end
+
+      if response.status != 200
+        # PAT connections make no token call, so a bad credential surfaces as a non-200 response.
+        deterministic = response.status >= 400 && response.status < 500
+        ttl = deterministic ? INTROSPECTION_FAILURE_TTL : INTROSPECTION_TRANSIENT_FAILURE_TTL
+        helpers.record_introspection_failure("HTTP error from Xurrent GraphQL API: #{response.status} " \
+                                             "'#{response.body}'", ttl)
+      end
+      helpers.extract_data_from_graphql_response(response)['__schema']
+    end
+
+    # Writes the bounded failure message to the negative cache keyed by the auth
+    # tuple and fails the job with it. The message is capped because it is
+    # re-logged on every cache hit for the TTL; the message never contains credentials.
+    helper :record_introspection_failure do |message, ttl|
+      bounded = message.to_s[0, INTROSPECTION_FAILURE_MESSAGE_LIMIT]
+      cache_write(helpers.introspection_failure_cache_key, bounded, ttl)
+      fail_job!(bounded)
+    end
+
+    # Builds a stable, secret-safe negative-cache key from the elements that
+    # determine whether introspection is authorized.
+    helper :introspection_failure_cache_key do
+      credentials = outbound_connection.config[:credentials] || {}
+      client_secret = credentials[:client_secret].present? ? decrypt_secret_string(credentials[:client_secret]) : ''
+      personal_access_token =
+        credentials[:personal_access_token].present? ? decrypt_secret_string(credentials[:personal_access_token]) : ''
+      account_id = credentials[:account_id].presence || helpers.system_account_id
+      tuple = [
+        helpers.graphql_endpoint, # for actual introspection
+        helpers.oauth_endpoint, # to get client-credential token
+        account_id,
+        credentials[:client_id],
+        client_secret,
+        personal_access_token,
+      ].join("\n")
+      "introspection_failure_#{Digest::SHA256.hexdigest(tuple)}"
     end
 
     # ──────────────────────────────────────────────

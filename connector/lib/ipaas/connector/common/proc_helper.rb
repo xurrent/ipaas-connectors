@@ -1,3 +1,4 @@
+require 'digest'
 require 'method_source'
 
 module IPaaS
@@ -5,6 +6,13 @@ module IPaaS
     module Common
       class ProcHelper
         ACTION_OUTPUT_REGEX = /action_output\('([^']+)'|action_output\("([^"]+)"/
+
+        # Field attributes any FIELD_RULES rule may consult to decide
+        # validity. Today only `NoSafePresentRule` reads the field, and it
+        # branches on `(required && type == :boolean)`. If a future rule
+        # reads a different attribute, widen `field_validation_class` AND
+        # this list. The contract-guard spec enforces this stays in sync.
+        FIELD_VALIDATION_ATTRIBUTES = [:required, :type].freeze
 
         class InvalidProcCalled < IPaaS::Error
         end
@@ -82,6 +90,19 @@ module IPaaS
             end
             context
           end
+
+          def captured_variables(proc, seen: Set.new)
+            seen << proc
+            proc.binding.local_variables.each_with_object({}) do |bound_local_var, acc|
+              value = proc.binding.local_variable_get(bound_local_var)
+              if value.is_a?(Proc)
+                captured_variables(value, seen: seen).each { |k, v| acc[k] = v } unless seen.include?(value)
+              else
+                acc[bound_local_var] = value
+              end
+              acc
+            end
+          end
         end
 
         cattr_accessor :validated_before do
@@ -99,12 +120,11 @@ module IPaaS
 
         def valid?
           self.errors = []
-          cache_key = "#{source}:#{@field&.object_id}"
-          return true if validated_before.include?(cache_key)
+          return true if validated_before.include?(validation_cache_key)
 
           validate_nodes(parse_ast)
           self.errors.none?.tap do |valid|
-            validated_before << cache_key if valid
+            validated_before.add(validation_cache_key) if valid
           end
         end
 
@@ -180,6 +200,22 @@ module IPaaS
           rubocop_source = RuboCop::AST::ProcessedSource.new(source, 3.4)
           validation_error(rubocop_source.diagnostics.map(&:render).join("\n")) if rubocop_source.ast.nil?
           rubocop_source.ast
+        end
+
+        def validation_cache_key
+          @validation_cache_key ||= "#{Digest::SHA256.hexdigest(source)}:#{field_validation_class}".freeze
+        end
+
+        # Rule behavior may depend on field attributes. If so, those must be used in key otherwise
+        # only source needs to be used to determine whether proc is safe.
+        def field_validation_class
+          # At the moment only NoSafePresentRule reads the field,
+          # and it branches on `(required && type == :boolean)`.
+
+          return :other unless @field
+          return :required_boolean if @field.try(:required) && @field.try(:type) == :boolean
+
+          :other
         end
       end
     end

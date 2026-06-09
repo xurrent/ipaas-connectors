@@ -310,6 +310,30 @@ describe 'Xurrent GraphQL Connection Action', :action do
         expect(stub).to have_been_requested.once
       end
 
+      # the response content is returned as output fully. A nested connection selected as
+      # notes { nodes { text } } keeps its nodes layer, in contrast to the xurrent_connector
+      # which would remove nodes and make notes an array containing the nodes' content.
+      it 'passes nested connection content through verbatim' do
+        node_fields = 'subject notes { nodes { text } }'
+        stub = stub_request(:post, endpoint)
+               .with(body: generate_expected_body('requests', node_fields: node_fields),
+                     headers: content_type_json)
+               .to_return(body: { data: { requests: {
+                 totalCount: 1,
+                 pageInfo: { hasNextPage: false, endCursor: 'theEnd' },
+                 nodes: [{ id: 'r1', subject: 'My request',
+                           notes: { nodes: [{ text: 'first note' }, { text: 'second note' }] }, }],
+               } } }.to_json)
+
+        output = run_action({ connection: 'requests', node_fields: node_fields })
+        # the sibling field proves the record itself is present and intact
+        expect(output[:nodes].pluck(:subject)).to contain_exactly('My request')
+        expect(output[:nodes].pluck(:notes)).to contain_exactly(
+          { nodes: [{ text: 'first note' }, { text: 'second note' }] },
+        )
+        expect(stub).to have_been_requested.once
+      end
+
       it 'uses page_size' do
         stub = stub_request(:post, endpoint)
                .with(body: generate_expected_body('services', page_size: 10), headers: content_type_json)

@@ -13,7 +13,7 @@ class LansweeperConnector < IPaaS::Connector::Definition
     avatar '/assets/icons/lansweeper.svg'
     description <<~END_OF_DESCRIPTION
       ## Overview
-      Connects to [Lansweeper](https://www.lansweeper.com/) via the Lansweeper GraphQL Data API to read sites, installations, asset types, and assets from your Lansweeper environment.
+      Connects to [Lansweeper](https://www.lansweeper.com/) via the Lansweeper GraphQL Data API to read sites, sources, asset types, and assets from your Lansweeper environment.
 
       ## Prerequisites
       - A Lansweeper account with API access.
@@ -85,16 +85,16 @@ class LansweeperConnector < IPaaS::Connector::Definition
 
       **Use case**: discover available sites or validate access.
 
-      ### Get Installations
+      ### Get Sources
 
-      Returns all installations for a specified site. Each installation is a Lansweeper server or data source.
+      Returns all sources for a specified site. Each source is a Lansweeper data source (e.g. a scanning server or cloud connector).
 
       **Input**:
       - `site_id` (required) — unique identifier of the site
 
-      **Output**: List of installations with ID, name, FQDN, type, asset count, and sync status.
+      **Output**: List of sources with ID, name, type, lifecycle state, and sync timestamps.
 
-      **Use case**: discover installations within a site, or scope asset queries by installation.
+      **Use case**: discover sources within a site, or scope asset queries by source.
 
       **Example Input**:
       ```json
@@ -106,15 +106,19 @@ class LansweeperConnector < IPaaS::Connector::Definition
       **Example Output**:
       ```json
       {
-        "installations": [
+        "total": 1,
+        "sources": [
           {
-            "installation_id": "11111111-1111-1111-1111-111111111111",
+            "source_id": "11111111-1111-1111-1111-111111111111",
             "site_id": "12345678-1234-1234-1234-123456789012",
             "name": "Main Server",
-            "fqdn": "lansweeper.example.com",
-            "type": "OnPremise",
-            "total_assets": 1500,
-            "sync_server_status": "Online"
+            "type": "IT",
+            "external_id": "abc-123",
+            "created_at": "2024-01-15T10:00:00Z",
+            "state": "ACTIVE",
+            "unlinked_on_date": null,
+            "deleted_on_date": null,
+            "first_sync_completed_on": "2024-01-15T11:30:00Z"
           }
         ]
       }
@@ -147,14 +151,14 @@ class LansweeperConnector < IPaaS::Connector::Definition
 
       ### Get Assets
 
-      Returns paginated assets for a site, with filtering by asset type, installation, IP address presence, and last-seen date.
+      Returns paginated assets for a site, with filtering by asset type, source, IP address presence, and last-seen date.
 
       **Input**:
       - `site_id` (required) — unique identifier of the site
       - `import_type` (optional, default: `all`) — `all`, `ip_only`, or `selected_types_only`
       - `asset_types` (conditional) — asset type names to filter by; required when `import_type` is `selected_types_only`
-      - `installation_handling` (optional, default: `all`) — `all` or `selected_only`
-      - `installation_ids` (conditional) — installation IDs to filter by; required when `installation_handling` is `selected_only`
+      - `source_handling` (optional, default: `all`) — `all` or `selected_only`
+      - `source_ids` (conditional) — source IDs to filter by; required when `source_handling` is `selected_only`
       - `cutoff_time` (optional) — return assets last seen after this time; defaults to 30 days ago
 
       **Output**: Paginated list of assets including name, type, IP address, last-seen timestamps, manufacturer, model, OS, installed software, hardware specs, and user associations (encrypted).
@@ -168,13 +172,13 @@ class LansweeperConnector < IPaaS::Connector::Definition
       }
       ```
 
-      **Example Input — selected installations**:
+      **Example Input — selected sources**:
       ```json
       {
         "site_id": "12345678-1234-1234-1234-123456789012",
         "import_type": "all",
-        "installation_handling": "selected_only",
-        "installation_ids": ["11111111-1111-1111-1111-111111111111"]
+        "source_handling": "selected_only",
+        "source_ids": ["11111111-1111-1111-1111-111111111111"]
       }
       ```
 
@@ -213,8 +217,8 @@ class LansweeperConnector < IPaaS::Connector::Definition
       ## Best Practices
       - **Incremental syncs**: Set `cutoff_time` on **Get Assets** to the timestamp of your last successful sync. Use the max `last_seen` from that run as the next `cutoff_time`.
       - **Narrow by asset type**: Use `import_type = selected_types_only` with `asset_types = [...]` to reduce payload and GraphQL query cost.
-      - **Narrow by installation**: In multi-installation environments, call **Get Installations** first, then pass selected IDs via `installation_handling = selected_only` + `installation_ids` on **Get Assets**.
-      - **Discover IDs at runbook start**: Call **Get Sites** → **Get Installations** → **Get Asset Types** early. Avoid hard-coding site or installation GUIDs.
+      - **Narrow by source**: In multi-source environments, call **Get Sources** first, then pass selected IDs via `source_handling = selected_only` + `source_ids` on **Get Assets**.
+      - **Discover IDs at runbook start**: Call **Get Sites** → **Get Sources** → **Get Asset Types** early. Avoid hard-coding site or source GUIDs.
       - **Refresh token**: Run **Get OAuth Refresh Token** once during connection setup; store the token in the connection's **Refresh Token** field.
 
       ## Common Use Cases
@@ -441,18 +445,20 @@ class LansweeperConnector < IPaaS::Connector::Definition
     end
 
     action '019b22dc-f781-7c72-b3c6-5e796a404308' do
-      name 'Get Installations'
+      name 'Get Sources'
       avatar '/assets/icons/lansweeper.svg'
+      nested true
       description <<~END_OF_DESCRIPTION
-        Returns all installations for a site. Each installation is a Lansweeper server or data source.
+        Returns all sources for a site. Each source is a Lansweeper data source (e.g. a scanning server or cloud connector).
 
-        **Use case**: discover installations within a site, or scope asset queries by installation.
+        **Use case**: discover sources within a site, or scope asset queries by source.
 
         ### Input Parameters
 
         | Parameter | Type | Required | Description |
         |-----------|------|----------|-------------|
         | `site_id` | String | Yes | Unique identifier of the site |
+        | `page_size` | Integer | No | Sources fetched per page (default 100, max 100). Mainly useful for testing; the action paginates through all sources regardless. |
 
         ### Example Input
 
@@ -466,109 +472,100 @@ class LansweeperConnector < IPaaS::Connector::Definition
 
         | Field Name | Type | Description |
         |---|---|---|
-        | `installations` | Array | One object per installation; see **Installation object fields** below |
+        | `total` | Integer | Total number of sources returned by the source query |
+        | `sources` | Array | One object per source; see **Source object fields** below |
 
-        #### Installation object fields
+        #### Source object fields
 
         | Field Name | Type | Description |
         |---|---|---|
-        | `installation_id` | String | Unique identifier |
+        | `source_id` | String | Unique identifier |
         | `site_id` | String | Parent site ID |
         | `name` | String | Display name |
-        | `fqdn` | String | Fully qualified domain name of the server |
-        | `description` | String | Free-text description |
-        | `type` | String | Installation type (e.g. `OnPremise`) |
-        | `total_assets` | Integer | Number of assets in this installation |
-        | `sync_server_status` | String | Server availability (e.g. `Online`, `Offline`) |
-        | `last_available` | DateTime | Last time the installation was reachable |
-        | `version` | String | Installation version |
+        | `type` | String | Source type (e.g. `IT`, `OT`, `IT_AGENT`, `CLOUD`, `NETWORK_DISCOVERY`, `MANUAL`) |
+        | `external_id` | String | External identifier from the underlying data source |
+        | `created_at` | DateTime | When the source was created |
+        | `state` | String | Current lifecycle state (e.g. `ACTIVE`) |
+        | `unlinked_on_date` | DateTime | When the source was unlinked (null if still linked) |
+        | `deleted_on_date` | DateTime | When the source was deleted (null if active) |
+        | `first_sync_completed_on` | DateTime | When the first sync completed |
 
         ### Example Output
 
         ```json
         {
-          "installations": [
+          "total": 1,
+          "sources": [
             {
-              "installation_id": "11111111-1111-1111-1111-111111111111",
+              "source_id": "11111111-1111-1111-1111-111111111111",
               "site_id": "12345678-1234-1234-1234-123456789012",
               "name": "Main Server",
-              "fqdn": "lansweeper.example.com",
-              "type": "OnPremise",
-              "total_assets": 1500,
-              "sync_server_status": "Online"
+              "type": "IT",
+              "external_id": "abc-123",
+              "created_at": "2024-01-15T10:00:00Z",
+              "state": "ACTIVE",
+              "unlinked_on_date": null,
+              "deleted_on_date": null,
+              "first_sync_completed_on": "2024-01-15T11:30:00Z"
             }
           ]
         }
         ```
 
         ### Best Practices
-        - Call after **Get Sites** to discover installations for the target site.
-        - Pass them to **Get Assets** as `installation_ids` to limit results to those installations.
-        - Prefer installations where `sync_server_status = "Online"`; offline installations may be stale.
+        - Call after **Get Sites** to discover sources for the target site.
+        - Pass them to **Get Assets** as `source_ids` to limit results to those sources.
       END_OF_DESCRIPTION
 
       input_schema do
         field :site_id, 'Site ID', :string, required: true
+        field :page_size, 'Page Size', :integer,
+              min: 1, max: 100,
+              visibility: 'optional',
+              default: DEFAULT_PAGE_SIZE,
+              hint: 'Number of sources to retrieve per page (1-100). Defaults to 100. ' \
+                    'The action paginates through all sources regardless.'
       end
 
-      output_schema do
-        field :installations, 'Installations', :nested,
+      output_schema 'page' do
+        field :total, 'Total', :integer
+        field :has_next_page, 'Has next page', :boolean, required: true
+        field :sources, 'Sources', :nested,
               array: true do
-          field :installation_id, 'Installation ID', :string, required: true
+          field :source_id, 'Source ID', :string, required: true
           field :site_id, 'Site ID', :string
           field :name, 'Name', :string, required: true
-          field :fqdn, 'FQDN', :string
-          field :description, 'Description', :string
           field :type, 'Type', :string
-          field :total_assets, 'Total Assets', :integer
-          field :sync_server_status, 'Sync Server Status', :string
-          field :last_available, 'Last Available', :date_time
-          field :version, 'Version', :string
+          field :external_id, 'External ID', :string
+          field :created_at, 'Created At', :date_time
+          field :state, 'State', :string
+          field :unlinked_on_date, 'Unlinked On Date', :date_time
+          field :deleted_on_date, 'Deleted On Date', :date_time
+          field :first_sync_completed_on, 'First Sync Completed On', :date_time
         end
+      end
+
+      iteration_state_schema do
+        field :next_cursor, 'Next cursor', :string, required: true
       end
 
       run do
-        query = <<~GRAPHQL
-          query getInstallations($siteId: ID!) {
-            site(id: $siteId) {
-              allInstallations {
-                id
-                siteId
-                name
-                fqdn
-                description
-                type
-                totalAssets
-                syncServerStatus
-                lastAvailable
-                version
-              }
-            }
-          }
-        GRAPHQL
+        state = helpers.initialize_sources_state(input)
+        query = helpers.build_sources_query(state)
+        result = helpers.graphql_query(query, { siteId: state[:site_id] })
 
-        result = helpers.graphql_query(query, { siteId: input[:site_id] })
+        fail_job!("Unable to query sources : #{result[:error]}") if result[:error]
 
-        fail_job!("Unable to query all installations : #{result[:error]}") if result[:error]
+        sources = result.dig('site', 'sources') || {}
+        next_cursor = sources.dig('pagination', 'next')
+        sources_data = helpers.transform_sources(sources['items'] || [])
 
-        installations = result.dig('site', 'allInstallations') || []
+        helpers.store_sources_iteration_state(next_cursor)
 
-        installations_data = installations.map do |inst|
-          {
-            installation_id: inst['id'],
-            site_id: inst['siteId'],
-            name: inst['name'],
-            fqdn: inst['fqdn'],
-            description: inst['description'],
-            type: inst['type'],
-            total_assets: inst['totalAssets'],
-            sync_server_status: inst['syncServerStatus'],
-            last_available: inst['lastAvailable'],
-            version: inst['version'],
-          }
-        end
-
-        [{ output: { installations: installations_data } }]
+        [{
+          output: { total: sources['total'] || sources_data.length, has_next_page: next_cursor.present?,
+                    sources: sources_data, }, schema_reference: 'page',
+        }]
       end
     end
 
@@ -659,8 +656,8 @@ class LansweeperConnector < IPaaS::Connector::Definition
         | `site_id` | String | Yes | – | Unique identifier of the site |
         | `import_type` | String | No | `all` | `all`, `ip_only`, or `selected_types_only` |
         | `asset_types` | Array of String | Conditional | – | Asset-type names to filter by. Required when `import_type` is `selected_types_only` |
-        | `installation_handling` | String | No | `all` | `all` or `selected_only` |
-        | `installation_ids` | Array of String | Conditional | – | Installation IDs to filter by. Required when `installation_handling` is `selected_only` |
+        | `source_handling` | String | No | `all` | `all` or `selected_only` |
+        | `source_ids` | Array of String | Conditional | – | Source IDs to filter by. Required when `source_handling` is `selected_only` |
         | `cutoff_time` | DateTime | No | 30 days ago | Return assets last seen after this time |
 
         ### Example Input: defaults
@@ -671,14 +668,14 @@ class LansweeperConnector < IPaaS::Connector::Definition
         }
         ```
 
-        ### Example Input: selected installations
+        ### Example Input: selected sources
 
         ```json
         {
           "site_id": "12345678-1234-1234-1234-123456789012",
           "import_type": "all",
-          "installation_handling": "selected_only",
-          "installation_ids": ["11111111-1111-1111-1111-111111111111"]
+          "source_handling": "selected_only",
+          "source_ids": ["11111111-1111-1111-1111-111111111111"]
         }
         ```
 
@@ -806,7 +803,7 @@ class LansweeperConnector < IPaaS::Connector::Definition
         ### Best Practices
         - **Incremental syncs**: Set `cutoff_time` to the timestamp of your last successful sync. Use the max `last_seen` from this run as the next `cutoff_time`.
         - **Reduce payload**: Use `import_type = selected_types_only` with `asset_types = [...]` to pull only the device categories you need.
-        - **Scope to installations**: In multi-installation sites, set `installation_handling = selected_only` and pass `installation_ids` discovered via **Get Installations**.
+        - **Scope to sources**: In multi-source sites, set `source_handling = selected_only` and pass `source_ids` discovered via **Get Sources**.
         - **Pagination is automatic.** The platform re-invokes this action until all pages are consumed; `has_next_page` is informational.
         - **Use `total` as a progress signal**: It's returned on the first page only; persist it if you need to display progress across pages.
       END_OF_DESCRIPTION
@@ -821,14 +818,14 @@ class LansweeperConnector < IPaaS::Connector::Definition
                 { value: 'ip_only', label: 'Only Assets With IP Address', id: 'ip_only' },
                 { value: 'selected_types_only', label: 'Only Selected Asset Types', id: 'selected_types_only' },
               ]
-        field :installation_handling, 'Installation Handling', :string,
+        field :source_handling, 'Source Handling', :string,
               visibility: 'optional',
               default: 'all',
               enumeration: [
-                { value: 'all', label: 'All Installations', id: 'all' },
-                { value: 'selected_only', label: 'Only Selected Installations', id: 'selected_only' },
+                { value: 'all', label: 'All Sources', id: 'all' },
+                { value: 'selected_only', label: 'Only Selected Sources', id: 'selected_only' },
               ]
-        field :installation_ids, 'Installation IDs', :string, array: true, visibility: 'optional'
+        field :source_ids, 'Source IDs', :string, array: true, visibility: 'optional'
         field :asset_types, 'Asset Types', :string, array: true, visibility: 'optional'
         field :cutoff_time, 'Cutoff Time', :date_time, visibility: 'optional'
       end
@@ -885,21 +882,21 @@ class LansweeperConnector < IPaaS::Connector::Definition
       iteration_state_schema do
         field :next_cursor, 'Next cursor', :string, required: true
         field :site_id, 'Site ID', :string, required: true
-        field :installation_ids, 'Installation IDs', :string, array: true
+        field :source_ids, 'Source IDs', :string, array: true
         field :asset_types, 'Asset Types', :string, array: true
         field :import_type, 'Import Type', :string
-        field :installation_handling, 'Installation Handling', :string
+        field :source_handling, 'Source Handling', :string
         field :last_seen_after, 'Last Seen After', :date_time
         field :page_size, 'Page size', :integer, required: true
       end
 
       run do
         import_type = input[:import_type] || 'all'
-        installation_handling = input[:installation_handling] || 'all'
+        source_handling = input[:source_handling] || 'all'
 
-        helpers.validate_asset_inputs(import_type, installation_handling, input)
+        helpers.validate_asset_inputs(import_type, source_handling, input)
 
-        state = helpers.initialize_asset_state(input, import_type, installation_handling)
+        state = helpers.initialize_asset_state(input, import_type, source_handling)
         query = helpers.build_assets_query(state)
         result = helpers.graphql_query(query[:query], query[:variables])
 
@@ -917,26 +914,26 @@ class LansweeperConnector < IPaaS::Connector::Definition
       end
     end
 
-    helper :validate_asset_inputs do |import_type, installation_handling, input|
+    helper :validate_asset_inputs do |import_type, source_handling, input|
       if import_type == 'selected_types_only' && input[:asset_types].blank?
         fail_job!('Asset Types is required when Import Type is "selected_types_only". ' \
                   'Please provide at least one asset type.')
       end
 
-      if installation_handling == 'selected_only' && input[:installation_ids].blank?
-        fail_job!('Installation IDs is required when Installation Handling is "selected_only". ' \
-                  'Please provide at least one installation ID.')
+      if source_handling == 'selected_only' && input[:source_ids].blank?
+        fail_job!('Source IDs is required when Source Handling is "selected_only". ' \
+                  'Please provide at least one source ID.')
       end
     end
 
-    helper :initialize_asset_state do |input, import_type, installation_handling|
+    helper :initialize_asset_state do |input, import_type, source_handling|
       {
         next_cursor: iteration_state_value(:next_cursor),
         site_id: input[:site_id],
-        installation_ids: installation_handling == 'selected_only' ? input[:installation_ids] : nil,
+        source_ids: source_handling == 'selected_only' ? input[:source_ids] : nil,
         asset_types: input[:asset_types],
         import_type: import_type,
-        installation_handling: installation_handling,
+        source_handling: source_handling,
         last_seen_after: input[:cutoff_time] || iteration_state_value(:last_seen_after) ||
           DEFAULT_CUTOFF_DAYS.days.ago.to_datetime,
         page_size: iteration_state_value(:page_size) || DEFAULT_PAGE_SIZE,
@@ -951,7 +948,7 @@ class LansweeperConnector < IPaaS::Connector::Definition
       filters = helpers.build_asset_filters(
         import_type: state[:import_type],
         last_seen_after: state[:last_seen_after],
-        installation_ids: state[:installation_ids],
+        source_ids: state[:source_ids],
         asset_types: state[:asset_types]
       )
 
@@ -1039,13 +1036,91 @@ class LansweeperConnector < IPaaS::Connector::Definition
       self.iteration_state_value = {
         next_cursor: next_cursor,
         site_id: state[:site_id],
-        installation_ids: state[:installation_ids],
+        source_ids: state[:source_ids],
         asset_types: state[:asset_types],
         import_type: state[:import_type],
-        installation_handling: state[:installation_handling],
+        source_handling: state[:source_handling],
         last_seen_after: state[:last_seen_after],
         page_size: state[:page_size],
       }
+    end
+
+    helper :initialize_sources_state do |input|
+      {
+        next_cursor: iteration_state_value(:next_cursor),
+        site_id: input[:site_id],
+        page_size: input[:page_size] || DEFAULT_PAGE_SIZE,
+      }
+    end
+
+    helper :build_sources_query do |state|
+      pagination = if state[:next_cursor].present?
+                     %(pagination: { limit: #{state[:page_size]}, page: NEXT, cursor: "#{state[:next_cursor]}" })
+                   else
+                     "pagination: { limit: #{state[:page_size]}, page: FIRST }"
+                   end
+
+      <<~GRAPHQL
+        query listSources($siteId: ID!) {
+          site(id: $siteId) {
+            sources(
+              #{pagination}
+              filters: {
+                conjunction: AND
+                groups: [
+                  {
+                    conditions: [
+                      { operator: EXISTS, path: "id", value: "true" }
+                    ]
+                    conjunction: AND
+                  }
+                ]
+              }
+            ) {
+              total
+              pagination { next }
+              items {
+                id
+                type
+                state {
+                  value
+                  unlinkedOnDate
+                  deletedOnDate
+                  firstSyncCompletedOn
+                }
+                siteId
+                createdAt
+                externalId
+                displayName
+              }
+            }
+          }
+        }
+      GRAPHQL
+    end
+
+    helper :transform_sources do |items|
+      items.map do |inst|
+        lifecycle = inst['state'] || {}
+        {
+          source_id: inst['id'],
+          site_id: inst['siteId'],
+          name: inst['displayName'] || inst['id'],
+          type: inst['type'],
+          external_id: inst['externalId'],
+          created_at: inst['createdAt'],
+          state: lifecycle['value'],
+          unlinked_on_date: lifecycle['unlinkedOnDate'],
+          deleted_on_date: lifecycle['deletedOnDate'],
+          first_sync_completed_on: lifecycle['firstSyncCompletedOn'],
+        }
+      end
+    end
+
+    helper :store_sources_iteration_state do |next_cursor|
+      next self.iteration_state_value = nil unless next_cursor.present?
+
+      self.iteration_state_value = { next_cursor: next_cursor }
     end
 
     helper :exchange_code_for_token do |client_id, client_secret, auth_code, callback_url|
@@ -1097,12 +1172,12 @@ class LansweeperConnector < IPaaS::Connector::Definition
       end
     end
 
-    helper :build_asset_filters do |import_type:, last_seen_after:, installation_ids:, asset_types:|
+    helper :build_asset_filters do |import_type:, last_seen_after:, source_ids:, asset_types:|
       filters = [
         helpers.build_asset_type_filter(asset_types),
         helpers.build_ip_filter(import_type, asset_types),
         helpers.build_last_seen_filter(last_seen_after),
-        helpers.build_installation_filter(installation_ids),
+        helpers.build_source_filter(source_ids),
       ].compact
 
       filters.any? ? "{ conjunction: AND\n groups: [ #{filters.join(",\n")} ]\n}" : '{ conjunction: AND groups: [] }'
@@ -1133,9 +1208,11 @@ class LansweeperConnector < IPaaS::Connector::Definition
       )
     end
 
-    helper :build_installation_filter do |installation_ids|
-      next nil unless installation_ids.present?
-      conditions = installation_ids.map { |id| %({ operator: EQUAL, path: "installationId", value: "#{id}" }) }
+    helper :build_source_filter do |source_ids|
+      next nil unless source_ids.present?
+      # Lansweeper's assetResources filter still uses the "installationId" path; a source's `id` is the
+      # value to pass here. Switch this path to "sourceId" once Lansweeper exposes it on assetResources.
+      conditions = source_ids.map { |id| %({ operator: EQUAL, path: "installationId", value: "#{id}" }) }
       helpers.create_conjunction('OR', *conditions)
     end
 
