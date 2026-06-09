@@ -284,7 +284,7 @@ describe IPaaS::Job::GraphQL::Schema do # -- mirrors GraphQL naming conventions
       expect(m.call({ kind: 'SCALAR', name: 'ISO8601Timestamp' }))
         .to eq(:date_time)
       expect(m.call({ kind: 'SCALAR', name: 'ISO8601Date' })).to eq(:date)
-      expect(m.call({ kind: 'SCALAR', name: 'JSON' })).to eq(:hash)
+      expect(m.call({ kind: 'SCALAR', name: 'JSON' })).to eq(:any)
     end
 
     it 'maps unknown scalar to string' do

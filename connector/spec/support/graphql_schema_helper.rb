@@ -126,7 +126,7 @@ module GraphqlSchemaHelper
         ]),
         t.input_type('CustomFieldInput', input_fields: [
           t.input_fld('id', t.non_null(t.scalar('String'))),
-          t.input_fld('value', t.scalar('String')),
+          t.input_fld('value', t.scalar('JSON')),
         ]),
         t.obj_type('Request', fields: [
           t.id_field,

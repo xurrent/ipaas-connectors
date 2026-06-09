@@ -327,8 +327,76 @@ describe 'Xurrent Mutation Action', :action do
       expect(output[:request_id]).to eq('req-test-123')
     end
 
-    # Request #78327181: nested connections lost from GraphQL result. Mutation
-    # payload objects can contain connection fields whose { nodes: [...] }
+    # Lock the mapping of JSON to any on both the input and output sides.
+    context 'setting a custom field to a non-hash JSON value' do
+      let(:written_custom_fields) do
+        [
+          { 'id' => 'is_boolean', 'value' => false },
+          { 'id' => 'affected_teams', 'value' => %w[support security ops] },
+          { 'id' => 'my_string', 'value' => 'xyz' },
+          { 'id' => 'my_number', 'value' => 2 },
+        ]
+      end
+      let(:read_custom_fields) do
+        [
+          { 'id' => 'is_boolean', 'value' => true },
+          { 'id' => 'my_string', 'value' => 'abc' },
+          { 'id' => 'affected_teams', 'value' => %w[network security] },
+          { 'id' => 'my_number', 'value' => 1 },
+          { 'id' => 'another_boolean', 'value' => false },
+        ]
+      end
+      let(:action_input) do
+        {
+          mutation: 'requestCreate',
+          input: {
+            'subject' => 'Laptop request',
+            'customFields' => written_custom_fields,
+          },
+          # Select the nested customFields on the returned record so it is both
+          # queried from Xurrent and declared in the generated output schema.
+          include_fields: { request: true, request_fields: { customFields: true } },
+        }
+      end
+
+      it 'sends the value to Xurrent and surfaces the echoed values in the output' do
+        received_input = nil
+        request_stub = stub_request(:post, graphql_endpoint)
+                       .with do |req|
+                         body = JSON.parse(req.body)
+                         next false if body['query'].include?('__schema')
+
+                         received_input = body.dig('variables', 'input')
+                         body['query'].include?('requestCreate')
+                       end
+          .to_return(
+            status: 200,
+            body: {
+              data: {
+                'requestCreate' => {
+                  'request' => {
+                    'id' => 'req-9001',
+                    'subject' => 'Laptop request',
+                    'customFields' => read_custom_fields,
+                  },
+                  'errors' => [],
+                },
+              },
+            }.to_json,
+            headers: graphql_response_headers,
+          )
+
+        output = run_action(action_input)
+
+        expect(request_stub).to have_been_requested
+        expect(received_input['customFields']).to eq(written_custom_fields)
+
+        expect(output[:request]['id']).to eq('req-9001')
+        expect(output[:request]['customFields']).to eq(read_custom_fields)
+      end
+    end
+
+    # Mutation payload objects can contain connection fields whose { nodes: [...] }
     # layer the generated schema does not declare; it must be flattened to the
     # array before output validation strips it.
     context 'payload object with a nested connection (personUpdate)' do

@@ -167,6 +167,15 @@ describe IPaaS::Job::GraphQL::FieldBuilder do
       expect(sub_ids).to include(:id, :value)
     end
 
+    it 'maps JSON scalar sub-fields to :any so any value is accepted' do
+      described_class.gql_add_dynamic_input_fields(
+        target, schema_data, 'RequestCreateInput', 0,
+      )
+      custom_field = target.field(:customFields)
+      value_field = custom_field.sub_fields.detect { |f| f.id == :value }
+      expect(value_field.type).to eq(:any)
+    end
+
     it 'marks list fields as array' do
       described_class.gql_add_dynamic_input_fields(
         target, schema_data, 'RequestCreateInput', 0,

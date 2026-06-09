@@ -59,6 +59,7 @@ module XurrentIntrospectionHelper
         skill_connection_type_def,
         skill_type_def,
         request_type_def,
+        custom_field_type_def,
         page_info_type_def,
         organization_type_def,
         request_create_payload_type_def,
@@ -223,6 +224,22 @@ module XurrentIntrospectionHelper
       'fields' => [
         { 'name' => 'id', 'description' => 'Request ID.', 'type' => { 'kind' => 'NON_NULL', 'name' => nil, 'ofType' => { 'kind' => 'SCALAR', 'name' => 'ID', 'ofType' => nil } }, 'args' => [] },
         { 'name' => 'subject', 'description' => 'Subject of the request.', 'type' => { 'kind' => 'SCALAR', 'name' => 'String', 'ofType' => nil }, 'args' => [] },
+        { 'name' => 'customFields', 'description' => 'Custom field values.', 'type' => { 'kind' => 'LIST', 'name' => nil, 'ofType' => { 'kind' => 'OBJECT', 'name' => 'CustomField', 'ofType' => nil } }, 'args' => [] },
+      ],
+      'inputFields' => nil,
+      'enumValues' => nil,
+      'possibleTypes' => nil,
+    }
+  end
+
+  def custom_field_type_def
+    {
+      'kind' => 'OBJECT',
+      'name' => 'CustomField',
+      'description' => nil,
+      'fields' => [
+        { 'name' => 'id', 'description' => nil, 'type' => { 'kind' => 'NON_NULL', 'name' => nil, 'ofType' => { 'kind' => 'SCALAR', 'name' => 'String', 'ofType' => nil } }, 'args' => [] },
+        { 'name' => 'value', 'description' => nil, 'type' => { 'kind' => 'SCALAR', 'name' => 'JSON', 'ofType' => nil }, 'args' => [] },
       ],
       'inputFields' => nil,
       'enumValues' => nil,
@@ -334,7 +351,7 @@ module XurrentIntrospectionHelper
       'fields' => nil,
       'inputFields' => [
         { 'name' => 'id', 'description' => nil, 'type' => { 'kind' => 'NON_NULL', 'name' => nil, 'ofType' => { 'kind' => 'SCALAR', 'name' => 'String', 'ofType' => nil } }, 'defaultValue' => nil },
-        { 'name' => 'value', 'description' => nil, 'type' => { 'kind' => 'SCALAR', 'name' => 'String', 'ofType' => nil }, 'defaultValue' => nil },
+        { 'name' => 'value', 'description' => nil, 'type' => { 'kind' => 'SCALAR', 'name' => 'JSON', 'ofType' => nil }, 'defaultValue' => nil },
       ],
       'enumValues' => nil,
       'possibleTypes' => nil,

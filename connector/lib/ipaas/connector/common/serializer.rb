@@ -2,7 +2,7 @@ module IPaaS
   module Connector
     module Common
       class Serializer
-        ALLOWED_CLASSES = [Symbol, Time, Date, DateTime].freeze
+        ALLOWED_CLASSES = [Symbol, Time, Date, DateTime, Regexp].freeze
 
         class << self
           def parse(value, with_uuid: false)

@@ -44,6 +44,10 @@ describe IPaaS::Connector::Common::Serializer do
     expect(subject.class.parse(:foo)).to eq(:foo)
   end
 
+  it 'should parse a Regexp value' do
+    expect(subject.class.parse('default: !ruby/regexp /\d+/')).to eq({ 'default' => /\d+/ })
+  end
+
   it 'should parse a YAML file' do
     file = Tempfile.new(%w[my-file .yaml])
     begin

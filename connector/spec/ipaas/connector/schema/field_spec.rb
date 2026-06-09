@@ -193,6 +193,22 @@ describe IPaaS::Connector::Schema::Field do
       end
     end
 
+    context 'regexp field with a default' do
+      let(:regexp_field) do
+        IPaaS::Connector::Schema::Field.new(id: :my_regex, label: 'My Regex', type: :regexp, default: '\d+')
+      end
+
+      it 'coerces the string default to a Regexp' do
+        expect(regexp_field.default).to be_a(Regexp)
+      end
+
+      it 'survives a YAML serialize -> parse round-trip' do
+        parsed = IPaaS::Connector::Common::Serializer.parse(regexp_field.to_h_ref.to_yaml)
+
+        expect(IPaaS::Connector::Schema::Field.new(parsed).default).to eq(/\d+/)
+      end
+    end
+
     context 'visibility' do
       it 'should validate the visibility' do
         field.visibility = 'foo'

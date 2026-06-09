@@ -53,7 +53,7 @@ module IPaaS
           'ISO8601DateTime' => :date_time,
           'ISO8601Timestamp' => :date_time,
           'ISO8601Date' => :date,
-          'JSON' => :hash,
+          'JSON' => :any,
         }.freeze
 
         NESTED_KINDS = %w[OBJECT INTERFACE UNION INPUT_OBJECT].freeze
