@@ -69,6 +69,16 @@ describe IPaaS::Connector::Common::ProcHelper do
       expect(helper.execute(4)).to eq(8)
     end
 
+    it 'should pass a single false param to the proc' do
+      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, '->(v) { v }')
+      expect(helper.execute(false)).to eq(false)
+    end
+
+    it 'should pass a single zero param to the proc' do
+      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, '->(v) { v }')
+      expect(helper.execute(0)).to eq(0)
+    end
+
     it 'should mirror the code as source' do
       helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, "'Hello World!'")
       expect(helper.source).to eq("'Hello World!'")

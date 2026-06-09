@@ -180,4 +180,4 @@ bundle exec rspec
 
 ## Copyright
 
-Copyright (c) 2024-2024 Xurrent Inc.
+Copyright (c) 2024 Xurrent Inc.

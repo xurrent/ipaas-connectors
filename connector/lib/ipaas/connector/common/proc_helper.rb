@@ -138,7 +138,7 @@ module IPaaS
           raise InvalidProcCalled, errors.to_s unless valid?
 
           executing do
-            if params.none? && kwargs.empty?
+            if params.empty? && kwargs.empty?
               run_proc
             else
               run_proc_with_params(*params, **kwargs)
