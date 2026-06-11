@@ -239,6 +239,47 @@ class XurrentAppConnector < IPaaS::Connector::Definition
                                                                        account_id: account_id)
       end
 
+      config_tester do
+        response = http_get(helpers.introspect_endpoint, nil, nil, open_timeout: 1, timeout: 2)
+        if response.status == 200
+          parsed = helpers.parse_introspection_response(response)
+          scopes = Array(parsed['scopes'])
+          if scopes.any?
+            { status: :success, message: "Connection successful. Token scopes: #{scopes.join(', ')}." }
+          else
+            { status: :failed, message: 'Token is valid but has no scopes.' }
+          end
+        elsif [401, 403].include?(response.status)
+          { status: :failed, message: "Xurrent rejected the credentials (HTTP #{response.status})." }
+        elsif response.status == 400
+          parsed = helpers.parse_introspection_response(response)
+          { status: :failed, message: parsed['message'].presence || 'Xurrent rejected the request (HTTP 400).' }
+        else
+          {
+            status: :error,
+            message: "Token introspection failed (HTTP #{response.status}): '#{response.body}'",
+          }
+        end
+      rescue IPaaS::Job::Outbound::CustomerCredentialsError => e
+        { status: :failed, message: e.message }
+      rescue JSON::ParserError
+        { status: :error, message: "Token introspection returned an unparseable response (HTTP #{response.status})." }
+      end
+
+      helper :parse_introspection_response do |response|
+        parsed = JSON.parse(response.body)
+        raise JSON::ParserError unless parsed.is_a?(Hash)
+        parsed
+      end
+
+      # Introspect lives on the oauth host; rebuild from the resolved oauth endpoint
+      # so stage/region/custom-endpoint resolution is reused.
+      helper :introspect_endpoint do
+        uri = URI.parse(helpers.oauth_endpoint)
+        port = uri.port == uri.default_port ? '' : ":#{uri.port}"
+        "#{uri.scheme}://#{uri.host}#{port}/introspect"
+      end
+
       setup_info do
         credentials_config = config[:credentials] || {}
         account_id = credentials_config[:account_id].presence || helpers.system_account_id

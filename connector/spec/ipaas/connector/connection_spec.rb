@@ -347,6 +347,27 @@ describe IPaaS::Connector::Connection do
       end
     end
 
+    describe '#uses_runbook_variables?' do
+      it 'is true when a mapping references a runbook variable' do
+        runbook_variable_connection = IPaaS::Connector::Connection.parse(
+          {
+            direction: 'outbound',
+            name: 'test outbound connection',
+            connector: { uuid: connector.uuid },
+            config_mapping: [
+              { field_id: 'bar', runbook_variable: 'my-variable' },
+            ],
+          }.to_yaml
+        )
+        expect(runbook_variable_connection.uses_runbook_variables?).to be true
+      end
+
+      it 'is false when no mapping references a runbook variable' do
+        # Contrast: the shared connection maps fields via fixed values and procs only.
+        expect(connection.uses_runbook_variables?).to be false
+      end
+    end
+
     context 'uuid' do
       it 'should take the given UUID' do
         expect(connection.uuid).to eq('connection_uuid')
@@ -385,9 +406,255 @@ describe IPaaS::Connector::Connection do
       end
     end
 
+    # The block dispatches on the resolved config value so a single connector
+    # covers all result shapes.
+    let(:tester_connector) do
+      IPaaS::Connector::Connector.new('config-tester-connector-id') do
+        outbound_connection do
+          config_schema do
+            field :bar, 'Bar', :string, required: true
+          end
+          config_tester do
+            log('config_tester invoked')
+            case config[:bar]
+            when 'success' then { status: :success, message: 'ok' }
+            when 'failed' then { status: :failed, message: 'wrong credentials' }
+            when 'error' then { status: :error, message: 'cannot reach' }
+            when 'string-status' then { status: 'failed', message: 'wrong credentials' }
+            when 'string-keys' then { 'status' => 'success', 'message' => 'ok' }
+            when 'invalid-status' then { status: :weird, message: 'x' }
+            when 'not-a-hash' then 'nope'
+            when 'ipaas-error' then raise IPaaS::Error, 'boom'
+            when 'read-timeout' then raise Faraday::TimeoutError, 'execution expired'
+            when 'open-timeout'
+              # Mirror faraday-net_http: an open timeout is re-raised as ConnectionFailed.
+              begin
+                raise Net::OpenTimeout, 'execution expired'
+              rescue Net::OpenTimeout => e
+                raise Faraday::ConnectionFailed, e
+              end
+            when 'dns-failure'
+              begin
+                raise SocketError, 'getaddrinfo: name unknown'
+              rescue SocketError => e
+                raise Faraday::ConnectionFailed, e
+              end
+            else raise 'kaboom'
+            end
+          end
+        end
+      end
+    end
+
+    def tester_connection(bar_value)
+      IPaaS::Connector::Connection.parse(
+        {
+          direction: 'outbound',
+          name: 'config tester connection',
+          connector: { uuid: tester_connector.uuid },
+          config_mapping: [{ field_id: 'bar', fixed: bar_value }],
+        },
+      )
+    end
+
+    describe '#config_tester' do
+      it 'returns the success result unchanged' do
+        expect(tester_connection('success').config_tester).to eq({ status: :success, message: 'ok' })
+      end
+
+      it 'returns the failed result unchanged' do
+        expect(tester_connection('failed').config_tester).to eq({ status: :failed, message: 'wrong credentials' })
+      end
+
+      it 'returns the error result unchanged' do
+        expect(tester_connection('error').config_tester).to eq({ status: :error, message: 'cannot reach' })
+      end
+
+      it 'coerces a string status to a symbol' do
+        # Contrast with 'returns the failed result unchanged' which uses a symbol status.
+        expect(tester_connection('string-status').config_tester)
+          .to eq({ status: :failed, message: 'wrong credentials' })
+      end
+
+      it 'accepts a result hash with string keys' do
+        # Connectors may build the result from parsed JSON, which has string keys.
+        expect(tester_connection('string-keys').config_tester)
+          .to eq({ status: :success, message: 'ok' })
+      end
+
+      it 'normalizes an unknown status to an error result' do
+        expect(tester_connection('invalid-status').config_tester)
+          .to eq({ status: :error, message: 'Test returned an invalid result.' })
+      end
+
+      it 'normalizes a non-hash return value to an error result' do
+        expect(tester_connection('not-a-hash').config_tester)
+          .to eq({ status: :error, message: 'Test returned an invalid result.' })
+      end
+
+      it 'converts an IPaaS::Error raised by the function into an error result' do
+        expect(tester_connection('ipaas-error').config_tester).to eq({ status: :error, message: 'boom' })
+      end
+
+      it 'converts a StandardError raised by the function into an error result' do
+        expect(tester_connection('anything-else').config_tester).to eq({ status: :error, message: 'kaboom' })
+      end
+
+      it 'converts a read timeout into a timed-out error result' do
+        expect(tester_connection('read-timeout').config_tester)
+          .to eq({ status: :error, message: 'The connection test timed out.' })
+      end
+
+      it 'converts an open timeout wrapped in a connection failure into a timed-out error result' do
+        # faraday-net_http delivers Net::OpenTimeout as Faraday::ConnectionFailed.
+        expect(tester_connection('open-timeout').config_tester)
+          .to eq({ status: :error, message: 'The connection test timed out.' })
+      end
+
+      it 'keeps the message of a connection failure that is not a timeout' do
+        # Contrast with the open-timeout case: Faraday::ConnectionFailed also
+        # covers DNS and refused connections, which must not read as timeouts.
+        expect(tester_connection('dns-failure').config_tester)
+          .to eq({ status: :error, message: 'getaddrinfo: name unknown' })
+      end
+
+      it 'returns an error result without invoking the function when the config is invalid' do
+        invalid_connection = IPaaS::Connector::Connection.parse(
+          {
+            direction: 'outbound',
+            name: 'config tester connection',
+            connector: { uuid: tester_connector.uuid },
+          },
+        )
+        logs = []
+        allow(invalid_connection).to receive(:log) { |msg| logs << msg }
+        expect(invalid_connection.config_tester)
+          .to eq({ status: :error, message: 'Connection configuration is invalid.' })
+        # The config_tester block logs on entry; no log proves it did not run.
+        expect(logs).to be_empty
+      end
+
+      it 'returns an error result when the connector does not provide a config tester' do
+        expect(connection.config_tester)
+          .to eq({ status: :error, message: 'Connector does not provide a config tester.' })
+      end
+
+      it 'returns an error result for an inbound connection' do
+        inbound_connection = IPaaS::Connector::Connection.parse(
+          {
+            direction: 'inbound',
+            name: 'test inbound connection',
+            connector: { uuid: connector.uuid },
+            config_mapping: [{ field_id: :foo, fixed: 'barbie' }],
+          },
+        )
+        expect(inbound_connection.config_tester)
+          .to eq({ status: :error, message: 'Connector does not provide a config tester.' })
+      end
+    end
+
+    describe '#config_tester?' do
+      it 'is true when the connector defines a config_tester on an outbound connection' do
+        expect(tester_connection('success').config_tester?).to be true
+      end
+
+      it 'is false when the connector does not define a config_tester' do
+        # Contrast with 'is true when the connector defines a config_tester'.
+        expect(connection.config_tester?).to be false
+      end
+
+      it 'is false for an inbound connection' do
+        inbound_connection = IPaaS::Connector::Connection.parse(
+          {
+            direction: 'inbound',
+            name: 'test inbound connection',
+            connector: { uuid: connector.uuid },
+            config_mapping: [{ field_id: :foo, fixed: 'barbie' }],
+          },
+        )
+        expect(inbound_connection.config_tester?).to be false
+      end
+    end
+
     it 'should define a self reference' do
       expect(connection.outbound_connection).to eq(connection)
       expect(connection.inbound_connection).to be_nil
+    end
+  end
+
+  context 'connection template helpers' do
+    let(:helpers_connector) do
+      IPaaS::Connector::Connector.new('connection-helpers-connector-id') do
+        helper :shared_suffix do
+          'connector'
+        end
+        inbound_connection do
+          config_schema do
+            field :foo, 'Foo', :string
+          end
+          helper :inbound_greeting do
+            "inbound #{helpers.shared_suffix}"
+          end
+          validate do |_request|
+            discard_trigger_event!(helpers.inbound_greeting)
+          end
+        end
+        outbound_connection do
+          config_schema do
+            field :bar, 'Bar', :string, required: true
+          end
+          helper :local_message do
+            "local #{helpers.shared_suffix}"
+          end
+          config_tester do
+            { status: :success, message: helpers.local_message }
+          end
+        end
+      end
+    end
+
+    def parse_connection(direction, config_mapping)
+      IPaaS::Connector::Connection.parse(
+        {
+          direction: direction,
+          name: "test #{direction} connection",
+          connector: { uuid: helpers_connector.uuid },
+          config_mapping: config_mapping,
+        },
+      )
+    end
+
+    it 'resolves outbound connection helpers and falls back to connector helpers' do
+      connection = parse_connection('outbound', [{ field_id: 'bar', fixed: 'high' }])
+      # 'local connector' proves both the connection-local helper and its
+      # parent fallback to the connector-level helper resolved.
+      expect(connection.config_tester).to eq({ status: :success, message: 'local connector' })
+    end
+
+    it 'resolves inbound connection helpers and falls back to connector helpers' do
+      connection = parse_connection('inbound', [{ field_id: 'foo', fixed: 'barbie' }])
+      # 'inbound connector' proves both the connection-local helper (inbound_greeting)
+      # and its parent fallback to the connector-level helper (shared_suffix) resolved.
+      expect { connection.validate_request(double) }
+        .to raise_error(IPaaS::Job::DiscardTriggerEvent, 'inbound connector')
+    end
+
+    it 'reaches a connector-level helper through the connection helpers' do
+      connection = parse_connection('outbound', [{ field_id: 'bar', fixed: 'high' }])
+      # shared_suffix is defined only on the connector, proving the parent chain
+      # is walked for a helper missing on the connection template.
+      expect(connection.helpers.shared_suffix).to eq('connector')
+    end
+
+    it 'raises NoMethodError for a helper not defined anywhere in the chain' do
+      connection = parse_connection('outbound', [{ field_id: 'bar', fixed: 'high' }])
+      # Contrast with 'reaches a connector-level helper through the connection helpers'.
+      expect { connection.helpers.unknown_helper }
+        .to raise_error(NoMethodError, "Missing helper method 'unknown_helper'.")
+    end
+
+    it 'has no helpers when the connection has no connector' do
+      expect(IPaaS::Connector::Connection.new('no-connector-uuid').helpers).to be_nil
     end
   end
 end

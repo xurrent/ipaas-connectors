@@ -44,6 +44,10 @@ class MyConnector < IPaaS::Connector::Definition
       bearer_authenticator
       # Custom authenticate blocks are for non-standard headers.
       authenticate { |request| request.headers['Authorization'] = "Token #{config[:api_key]}" }
+      # Optional: lets the user test the configuration from the connection page.
+      # Return status :success (test passed), :failed (test ran, not successful)
+      # or :error (problem executing the test), plus a message, within 10 seconds.
+      config_tester { { status: :success, message: 'Connection successful.' } }
     end
 
     trigger_template '<trigger-uuid-v7>' do
@@ -87,13 +91,13 @@ A few things to notice:
 
 - **`config`** inside `inbound_connection` or `outbound_connection` holds the resolved configuration the user supplied for that connection.
 - **`input`** inside an action's `run` block holds the resolved input mapping for that step.
-- **`helpers.<name>`** calls a `helper :<name> do … end` defined elsewhere in the connector. Helpers call other helpers the same way.
+- **`helpers.<name>`** calls a `helper :<name> do … end` defined elsewhere in the connector. Helpers call other helpers the same way. Helpers can be defined at the connector level or locally inside an `inbound_connection`, `outbound_connection`, `trigger_template`, or `action_template`; a local helper takes precedence and lookups fall back to the connector-level helpers.
 - Call **`backoff_if_needed`** on every HTTP response. It raises `RescheduleJob` when the API answers `429` or `503`, and the runtime retries the step after the suggested delay.
 - **HMAC and signature validation** belong in the inbound connection's `validate` block. The framework rewinds the request body between `validate` and `parse`, so `parse` still sees the full body. Connector code cannot call `request.body.rewind` itself — the framework does it.
 
 ## The connector sandbox
 
-Connector code runs in a restricted Ruby environment. The runtime parses every `validate`, `parse`, `run`, `authenticate`, and `helper` block and rejects code that does any of the following:
+Connector code runs in a restricted Ruby environment. The runtime parses every `validate`, `parse`, `run`, `authenticate`, `config_tester`, and `helper` block and rejects code that does any of the following:
 
 - **No method definitions.** The sandbox rejects `def foo` and `def self.foo`. Use helpers (`helper :foo do … end`) for reusable logic.
 - **No constant definitions.** The sandbox rejects `MY_CONST = …`. Inline the value, or compute it inside a helper.

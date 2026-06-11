@@ -383,6 +383,10 @@ describe 'Xurrent Outbound Connection', :outbound_connection do
     end
   end
 
+  describe 'config_tester' do
+    it_behaves_like 'xurrent token introspection config tester'
+  end
+
   describe 'config_schema defaults' do
     it 'marks credentials.account_id as optional with leave-blank fallback' do
       field = outbound_connection.config_schema

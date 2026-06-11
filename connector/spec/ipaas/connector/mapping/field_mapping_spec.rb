@@ -296,4 +296,67 @@ describe IPaaS::Connector::Mapping::FieldMapping do
       expect(mapping3.update_runbook_variable('old-id', 'new-id')).to be_falsey
     end
   end
+
+  describe '#uses_runbook_variables?' do
+    let(:runbook_variable_field_def) do
+      double('FieldDefinition', type: :runbook_variable)
+    end
+
+    let(:string_field_def) do
+      double('FieldDefinition', type: :string)
+    end
+
+    it 'detects the runbook_variable attribute' do
+      mapping = IPaaS::Connector::Mapping::FieldMapping.parse(
+        { field_id: :foo, runbook_variable: 'my-variable' }
+      )
+      expect(mapping.uses_runbook_variables?).to be true
+    end
+
+    it 'detects a fixed value on a runbook_variable typed field' do
+      mapping = IPaaS::Connector::Mapping::FieldMapping.parse(
+        { field_id: :foo, fixed: 'my-variable' }
+      )
+      mapping.field_definition = runbook_variable_field_def
+      expect(mapping.uses_runbook_variables?).to be true
+    end
+
+    it 'detects procs for all runbook variable methods and safe navigation' do
+      ['runbook.read_variable("x")', "runbook&.write_variable('x', 1)", 'runbook.variable_field("x")']
+        .each do |proc_str|
+        mapping = IPaaS::Connector::Mapping::FieldMapping.parse({ field_id: :foo, proc: proc_str })
+        expect(mapping.uses_runbook_variables?).to be(true), proc_str
+      end
+    end
+
+    it 'detects runbook variables in nested mappings' do
+      mapping = IPaaS::Connector::Mapping::FieldMapping.parse(
+        { field_id: :foo, nested: [{ field_id: :bar, runbook_variable: 'my-variable' }] }
+      )
+      expect(mapping.uses_runbook_variables?).to be true
+    end
+
+    it 'is false for mappings without runbook variable references' do
+      # Contrast for each detected shape: plain fixed, environment variable,
+      # unrelated proc, and nested without references.
+      [
+        { field_id: :foo, fixed: 'plain' },
+        { field_id: :foo, variable: 'environment-variable' },
+        { field_id: :foo, proc: 'environment[:foo]' },
+        { field_id: :foo, nested: [{ field_id: :bar, fixed: 'x' }] },
+      ].each do |hash|
+        mapping = IPaaS::Connector::Mapping::FieldMapping.parse(hash)
+        expect(mapping.uses_runbook_variables?).to be(false), hash.inspect
+      end
+    end
+
+    it 'is false for a fixed value on a field that is not runbook_variable typed' do
+      # Contrast with 'detects a fixed value on a runbook_variable typed field'.
+      mapping = IPaaS::Connector::Mapping::FieldMapping.parse(
+        { field_id: :foo, fixed: 'my-variable' }
+      )
+      mapping.field_definition = string_field_def
+      expect(mapping.uses_runbook_variables?).to be false
+    end
+  end
 end

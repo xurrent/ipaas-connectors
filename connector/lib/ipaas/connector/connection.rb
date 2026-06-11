@@ -7,7 +7,9 @@ module IPaaS
     class Connection
       extend IPaaS::Connector::Common::ProcRules::ProcSafe
 
-      proc_safe :setup_info
+      CONFIG_TESTER_STATUSES = [:success, :failed, :error].freeze
+
+      proc_safe :setup_info, :config_tester
 
       include IPaaS::Connector::Common::Model
       include IPaaS::Connector::Common::UuidMixin
@@ -52,7 +54,7 @@ module IPaaS
           connection.config_mapping = Array(hash[:config_mapping]).map do |cm|
             IPaaS::Connector::Mapping::FieldMapping.parse(cm)
           end
-          connection_template = connection.connector&.send(:"#{connection.direction}_connection")
+          connection_template = connection.connection_definition
           connection.copy_schema_blocks_from(connection_template, :config_schema) if connection_template
         end
       end
@@ -72,6 +74,10 @@ module IPaaS
           updated |= mapping.update_runbook_variable(id_was, new_id)
         end
         updated
+      end
+
+      def uses_runbook_variables?
+        config_mapping.any?(&:uses_runbook_variables?)
       end
 
       def config(resolve: false)
@@ -120,6 +126,21 @@ module IPaaS
         connection_definition.call_function(:setup_info, self)
       end
 
+      def config_tester
+        return { status: :error, message: 'Connector does not provide a config tester.' } unless config_tester?
+        return { status: :error, message: 'Connection configuration is invalid.' } unless config.valid?
+
+        normalize_config_tester_result(connection_definition.call_function(:config_tester, self))
+      rescue StandardError => e
+        return { status: :error, message: 'The connection test timed out.' } if config_tester_timeout?(e)
+        { status: :error, message: e.message }
+      end
+
+      # Whether the test feature is available, without executing it.
+      def config_tester?
+        outbound? && connection_definition&.config_tester.present?
+      end
+
       def provision
         raise('Cannot provision connection when the config is invalid.') unless config.valid?
         connection_definition.call_function(:provision, self) if outbound?
@@ -129,10 +150,32 @@ module IPaaS
         connection_definition.call_function(:deprovision, self) if outbound?
       end
 
-      private
-
       def connection_definition
         connector&.send(:"#{direction}_connection")
+      end
+
+      private
+
+      def config_tester_timeout?(error)
+        return true if error.is_a?(Timeout::Error) || error.is_a?(Faraday::TimeoutError)
+        return false unless error.is_a?(Faraday::ConnectionFailed)
+
+        # Faraday wraps an open timeout in ConnectionFailed, which also
+        # covers DNS and refused connections, so only its cause identifies a timeout.
+        [error.cause, error.wrapped_exception].any?(Timeout::Error)
+      end
+
+      # A connector implementation returning anything but a known status means the
+      # test could not be executed, so the platform always receives a usable shape.
+      # Keys are symbolized as connectors may build the result from parsed JSON.
+      def normalize_config_tester_result(result)
+        result = result.symbolize_keys if result.is_a?(Hash)
+        status = result.is_a?(Hash) ? result[:status]&.to_sym : nil
+        unless CONFIG_TESTER_STATUSES.include?(status)
+          return { status: :error, message: 'Test returned an invalid result.' }
+        end
+
+        { status: status, message: result[:message].to_s }
       end
 
       def direction_valid?

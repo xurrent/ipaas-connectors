@@ -8,6 +8,7 @@ module IPaaS
           def helpers
             return action_template.helpers if self.is_a?(IPaaS::Connector::Action)
             return trigger_template.helpers if self.is_a?(IPaaS::Connector::Trigger)
+            return connection_definition.helpers if self.is_a?(IPaaS::Connector::Connection) && connection_definition
 
             try(:connector)&.helpers
           end

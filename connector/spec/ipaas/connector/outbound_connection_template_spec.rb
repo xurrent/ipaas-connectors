@@ -49,7 +49,7 @@ describe IPaaS::Connector::OutboundConnectionTemplate do
       skip_function_capture_validation
     end
 
-    [:authenticate].each do |function_name|
+    [:authenticate, :config_tester].each do |function_name|
       it "should define the #{function_name} function" do
         expect(outbound_connection.send(function_name)).to be_nil
         outbound_connection.send(function_name) do

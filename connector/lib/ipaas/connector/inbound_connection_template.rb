@@ -3,6 +3,7 @@ module IPaaS
     # schema definition for connector.inbound_connection
     class InboundConnectionTemplate
       include IPaaS::Connector::Common::Model
+      include IPaaS::Connector::Dsl::HelpersMixin
 
       attr_accessor :connector
 

@@ -43,9 +43,17 @@ module IPaaS
             end
           end
 
+          # The methods through which procs access runbook variables; shared by the
+          # replacer and the usage detector so they cannot drift apart.
+          RUNBOOK_VARIABLE_METHODS = /read_variable|write_variable|variable_field/
+          RUNBOOK_VARIABLE_USAGE = /runbook&?\.(?:#{RUNBOOK_VARIABLE_METHODS})\b/
+
+          def runbook_variables_used?(proc)
+            RUNBOOK_VARIABLE_USAGE.match?(proc.to_s)
+          end
+
           def create_runbook_variable_replacer(id_was, new_id)
-            methods = 'read_variable|write_variable|variable_field'
-            pattern = /(runbook&?\.)(#{methods})\s*\(\s*(["'])#{Regexp.escape(id_was)}\3/
+            pattern = /(runbook&?\.)(#{RUNBOOK_VARIABLE_METHODS})\s*\(\s*(["'])#{Regexp.escape(id_was)}\3/
             ->(proc) do
               proc.gsub(pattern) do
                 receiver = ::Regexp.last_match(1)

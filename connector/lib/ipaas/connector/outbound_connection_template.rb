@@ -3,6 +3,7 @@ module IPaaS
     # schema definition for connector.outbound_connection
     class OutboundConnectionTemplate
       include IPaaS::Connector::Common::Model
+      include IPaaS::Connector::Dsl::HelpersMixin
 
       attr_accessor :connector
 
@@ -27,6 +28,7 @@ module IPaaS
       function :provision
       function :deprovision
       function :authenticate
+      function :config_tester
 
       private
 

@@ -49,6 +49,7 @@ module IPaaS
         IPaaS::Connector::InboundConnectionTemplate.new.tap do |inbound|
           @inbound_connection = inbound
           inbound.connector = self
+          inbound.helpers.parent_helpers = self.helpers
           inbound.instance_eval(&block)
         end
       end
@@ -60,6 +61,7 @@ module IPaaS
         IPaaS::Connector::OutboundConnectionTemplate.new.tap do |outbound|
           @outbound_connection = outbound
           outbound.connector = self
+          outbound.helpers.parent_helpers = self.helpers
           outbound.instance_eval(&block)
         end
       end

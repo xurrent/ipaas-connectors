@@ -42,6 +42,10 @@ For more complete examples see the connector-SDK.
     * `provision`: code to be executed when the outbound connection is provisioned
     * `deprovision`: code to be executed when the outbound connection is deprovisioned
     * `authenticate`: code for custom authorization of outbound traffic
+    * `config_tester`: optional code to test the resolved connection configuration, e.g. by calling the
+      external system. Must return `{status:, message:}` within 10 seconds, where status is `:success`
+      (test performed and passed), `:failed` (test performed and not successful) or `:error` (problem
+      executing the test)
 * `trigger_templates`, array of:
     * `uuid`: unique identifier
     * `name`: unique name

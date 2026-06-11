@@ -446,6 +446,11 @@ describe 'Xurrent Outbound Connection', :outbound_connection do
     end
   end
 
+  describe 'config_tester' do
+    it_behaves_like 'xurrent token introspection config tester'
+    it_behaves_like 'xurrent config tester with a personal access token'
+  end
+
   describe 'system environment variable fallbacks' do
     let(:outbound_connection_config) do
       {

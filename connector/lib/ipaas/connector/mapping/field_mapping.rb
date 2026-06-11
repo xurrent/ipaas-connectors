@@ -27,6 +27,12 @@ module IPaaS
           end
         end
 
+        def runbook_variables_used?(proc_container)
+          proc_container.visit_procs(false) do |_path, _mapping, found, proc|
+            found || IPaaS::Connector::Common::ProcHelper.runbook_variables_used?(proc)
+          end
+        end
+
         private
 
         def validate_mapping(record, attribute, mappings)
@@ -174,7 +180,24 @@ module IPaaS
           updated
         end
 
+        # Mirrors the shapes update_runbook_variable touches; runbook_variables_used? covers
+        # procs in nested mappings, the recursion covers their other attributes.
+        def uses_runbook_variables?
+          runbook_variable.present? ||
+            fixed_runbook_variable? ||
+            Mapping.runbook_variables_used?(self) ||
+            nested_uses_runbook_variables?
+        end
+
         private
+
+        def fixed_runbook_variable?
+          fixed.present? && field_definition&.type == :runbook_variable
+        end
+
+        def nested_uses_runbook_variables?
+          nested.present? && nested.any?(&:uses_runbook_variables?)
+        end
 
         def try_update_runbook_variable_attribute?(id_was, new_id)
           return false unless runbook_variable == id_was
