@@ -14,12 +14,17 @@ describe IPaaS::Connector::Types::DateTimeType do
   end
 
   describe 'resolve' do
+    def validate_type(resolved)
+      expect(resolved).to be_a(subject.ruby_class), "Expected #{subject.ruby_class} got #{resolved.class}"
+    end
+
     it 'should leave nils untouched' do
       expect(subject.resolve(nil)).to be_nil
     end
 
     it 'should resolve date time with timezone' do
       resolved = subject.resolve('Tue, 11 Jun 2024 16:55:50 +0200')
+      validate_type(resolved)
       {
         year: 2024,
         month: 6,
@@ -34,6 +39,7 @@ describe IPaaS::Connector::Types::DateTimeType do
 
     it 'should convert date to date time at start of day' do
       resolved = subject.resolve(Date.parse('Tue, 11 Jun 2024'))
+      validate_type(resolved)
       {
         year: 2024,
         month: 6,
@@ -54,6 +60,7 @@ describe IPaaS::Connector::Types::DateTimeType do
           time_zone: 'America/New_York',
         }
       )
+      validate_type(resolved)
       {
         year: 2024,
         month: 6,

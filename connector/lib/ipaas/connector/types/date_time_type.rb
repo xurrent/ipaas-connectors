@@ -55,7 +55,7 @@ module IPaaS
           def resolve_from_hash(resolved_value)
             date_time = resolved_value[:date].in_time_zone(resolved_value[:time_zone])
             time = resolved_value[:time]
-            date_time.change({ hour: time.hour, min: time.min, sec: time.sec })
+            date_time.change({ hour: time.hour, min: time.min, sec: time.sec }).to_datetime
           rescue StandardError
             resolved_value
           end
