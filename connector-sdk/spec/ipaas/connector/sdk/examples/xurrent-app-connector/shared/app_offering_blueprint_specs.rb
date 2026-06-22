@@ -222,6 +222,7 @@ module AppOfferingBlueprintSpecs
           input[:uiExtensionId] = 'ui-extension-id'
           input[:uiExtensionVersionId] = 'ui-extension-version-id'
           input[:pictureUri] = avatar_to_picture_uri(input)
+          input[:webhookUriTemplate] = "#{trigger.endpoint}?customer_account_id={account}"
           input
         end
 

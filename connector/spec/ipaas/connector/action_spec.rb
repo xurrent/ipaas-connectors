@@ -724,6 +724,29 @@ describe IPaaS::Connector::Action do
     end
   end
 
+  context 'when schema resolution block is not yielded' do
+    it 'memoizes the resolve return value so @input is never nil' do
+      fallback = double(:resolved_mapping)
+      # and_return replaces the method entirely, so the block passed by #input is never yielded
+      allow(action.input_schema).to receive(:resolve).and_return(fallback)
+
+      result = action.input(resolve: true)
+
+      expect(result).to be(fallback) # object identity proves fallback path
+      expect(action.input).to be(fallback) # memoized on subsequent call
+    end
+
+    it 'prefers the block-assigned value over the return value when the block is yielded' do
+      resolve_return = action.input_schema.resolve(action, action.input_mapping)
+
+      result = action.input(resolve: true)
+
+      expect(result).not_to be(resolve_return) # block set a different object
+      expect(result[:numbers]).to eq([1, 3, 5, 10, 20])
+      expect(action.input).to be(result) # memoized on subsequent call
+    end
+  end
+
   context 'case' do
     let(:case_connector) do
       IPaaS::Connector::Connector.new('flow') do

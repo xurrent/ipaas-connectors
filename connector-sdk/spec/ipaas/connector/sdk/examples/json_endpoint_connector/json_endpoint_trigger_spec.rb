@@ -160,6 +160,11 @@ describe 'JSON Endpoint Trigger', :trigger do
         expect(output).to eq({ error: msg })
       end
 
+      it 'should reject a body that is not valid JSON' do
+        output = post_trigger('this is not valid json')
+        expect(output).to eq({ error: 'Request body could not be parsed' })
+      end
+
       it 'should complain when value is out of range' do
         output = post_trigger({ pet: 'Zuzu', cars: { nr: 333, driver: 'MV' } })
         nr_error_message = "Field 'nr' should be at most 99."

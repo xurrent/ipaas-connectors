@@ -1985,10 +1985,15 @@ class XurrentAppConnector < IPaaS::Connector::Definition
     # Blueprint helpers for managing app offering - Webhook Template Uri
 
     helper :remove_default_webhook_template do |app_offering_input, app_offering|
-      # do not overwrite existing webhook template with default from blueprint
-      next unless app_offering&.dig('webhookUriTemplate').present?
+      next unless app_offering_input['webhookUriTemplate'] == 'https://test.com'
 
-      app_offering_input.delete('webhookUriTemplate') if app_offering_input['webhookUriTemplate'] == 'https://test.com'
+      if app_offering&.dig('webhookUriTemplate').present?
+        # do not overwrite existing webhook template with default from blueprint
+        app_offering_input.delete('webhookUriTemplate')
+      else
+        # replace placeholder with trigger endpoint for new app offerings
+        app_offering_input['webhookUriTemplate'] = "#{trigger.endpoint}?customer_account_id={account}"
+      end
     end
 
     ##################################################################################

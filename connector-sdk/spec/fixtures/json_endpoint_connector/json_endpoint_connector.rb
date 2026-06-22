@@ -343,8 +343,17 @@ class JsonEndpointConnector < IPaaS::Connector::Definition
 
         uri = URI.parse(request.url)
         body_content = request.body&.read
+        parsed_body = if body_content.present?
+                        begin
+                          JSON.parse(body_content)
+                        rescue JSON::ParserError
+                          fail_job!('Request body could not be parsed')
+                        end
+                      else
+                        body_content
+                      end
         request_params = {
-          body: body_content.present? ? JSON.parse(body_content) : body_content,
+          body: parsed_body,
           url_postfix: request.params['url_postfix'],
           query_params: uri.query ? Rack::Utils.parse_query(uri.query) : {},
         }

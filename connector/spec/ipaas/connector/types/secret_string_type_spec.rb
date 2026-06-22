@@ -43,8 +43,10 @@ describe IPaaS::Connector::Types::SecretStringType do
 
   describe 'valid?' do
     it 'should validate secrets' do
+      errors = []
       secret = make_secret_string('Hello Moon!')
-      expect(subject.valid?(secret)).to be_truthy
+      expect(subject.valid?(secret, errors)).to be_truthy
+      expect(errors).to be_empty
     end
 
     it 'should validate blank values' do
@@ -60,6 +62,12 @@ describe IPaaS::Connector::Types::SecretStringType do
       not_a_drr = { not: 'a', data: 'row_record' }.to_json
       expect(subject.valid?(not_a_drr)).to be_falsey
       expect(subject.valid?(IPaaS::Encryption::SecretString.new(not_a_drr))).to be_falsey
+    end
+
+    it 'should explain the expected type when invalidating a non-secret' do
+      errors = []
+      subject.valid?('Hello Moon!', errors)
+      expect(errors).to eq(['Expected an encrypted secret string value.'])
     end
   end
 

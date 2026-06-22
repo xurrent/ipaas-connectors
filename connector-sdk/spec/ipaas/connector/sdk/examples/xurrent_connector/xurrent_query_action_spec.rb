@@ -43,10 +43,10 @@ describe 'Xurrent Query Action', :action do
         expect(field.required).to be_truthy
       end
 
-      it 'defines page_size with default 100 and optional visibility' do
+      it 'defines page_size defaulting to DEFAULT_PAGE_SIZE with optional visibility' do
         field = action.input_schema.field(:page_size)
         expect(field.type).to eq(:integer)
-        expect(field.default).to eq(100)
+        expect(field.default).to eq(XurrentConnector::DEFAULT_PAGE_SIZE)
         expect(field.visibility).to eq('optional')
       end
 
@@ -367,6 +367,45 @@ describe 'Xurrent Query Action', :action do
 
         run_action(action_input)
         expect(query_stub).to have_been_requested
+      end
+    end
+
+    context 'when page_size is left blank (Request#78851123)' do
+      # A blank page_size emitted `first: ` with no value, which Xurrent's parser
+      # rejected ("Expected NAME, actual: COLON"); it must fall back to the default.
+      # Contrast (explicit page_size emits its own value): 'sends first parameter matching page_size' above.
+      let(:action_input) { { object: 'people', page_size: nil, view: 'all', filter: { name: ['Acme'] } } }
+
+      it 'falls back to first: 100 instead of an empty first argument' do
+        captured_query = nil
+        query_stub = stub_request(:post, graphql_endpoint)
+                     .with do |req|
+                       body = JSON.parse(req.body)
+                       next false if body['query'].include?('__schema')
+
+                       captured_query = body['query']
+                       true
+                     end
+          .to_return(
+            status: 200,
+            body: {
+              data: {
+                'people' => {
+                  'totalCount' => 0,
+                  'pageInfo' => { 'hasNextPage' => false, 'endCursor' => nil },
+                  'nodes' => [],
+                },
+              },
+            }.to_json,
+            headers: graphql_response_headers,
+          )
+
+        run_action(action_input)
+
+        expect(query_stub).to have_been_requested
+        expect(captured_query).to include("first: #{XurrentConnector::DEFAULT_PAGE_SIZE}")
+        # the exact malformed shape from the report: empty `first:` before the next arg
+        expect(captured_query).not_to match(/first:\s*[,)]/)
       end
     end
 

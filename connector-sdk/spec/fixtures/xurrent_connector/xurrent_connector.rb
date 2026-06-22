@@ -8,6 +8,8 @@ class XurrentConnector < IPaaS::Connector::Definition
 
   MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 
+  DEFAULT_PAGE_SIZE = 100
+
   INTROSPECTION_FAILURE_TTL = 10.minutes # configuration errors cached for 10 minutes
   INTROSPECTION_TRANSIENT_FAILURE_TTL = 30.seconds # transient errors cached for 30 seconds
   INTROSPECTION_FAILURE_MESSAGE_LIMIT = 200 # cap on the length of the error message
@@ -684,7 +686,7 @@ class XurrentConnector < IPaaS::Connector::Definition
         schema.field :page_size, 'Page size', :integer,
                      min: 1, max: 100,
                      visibility: 'optional',
-                     default: 100,
+                     default: DEFAULT_PAGE_SIZE,
                      hint: 'Number of records to retrieve per page (1-100). Defaults to 100.'
         schema.field :max_results, 'Max results', :integer,
                      min: 1,
@@ -836,7 +838,7 @@ class XurrentConnector < IPaaS::Connector::Definition
       end
 
       helper :effective_page_size do
-        page_size = input[:page_size]
+        page_size = input[:page_size] || DEFAULT_PAGE_SIZE
         max_results = input[:max_results]
         if max_results.present?
           fetched_count = iteration_state_value(:fetched_count).to_i

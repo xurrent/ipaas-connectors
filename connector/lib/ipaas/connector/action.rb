@@ -115,9 +115,10 @@ module IPaaS
         return @input if instance_variable_defined?(:@input) && !resolve
 
         @input = nil # Prevents infinite loops; see https://xurrent-support.xurrent.com/requests/64601195
-        input_schema.resolve(self, input_mapping) do |values|
+        result = input_schema.resolve(self, input_mapping) do |values|
           @input = values
         end
+        @input ||= result # Fallback: block is skipped when resolve raises, memoize return value
       end
 
       def log_input(input)
@@ -411,9 +412,26 @@ module IPaaS
       def input_mapping_valid?
         return unless action_template
         return if IPaaS::Connector::Mapping.invalid_mapping?(self, :input_mapping)
-        return if input.valid?
 
-        errors.add(:input_mapping, "invalid: #{input.full_error_messages}")
+        # Trust an already-resolved input when it validates: re-resolving here can
+        # be expensive (dynamic schemas re-introspect a potentially multi-MB schema)
+        # and #run re-resolves regardless, so the gate only resolves when no valid
+        # memo exists yet. Reading @input directly keeps this a pure check (no
+        # resolve); it is nil before the first resolve and if a prior resolve raised.
+        return if @input&.valid?
+
+        # In execution mode the parse-time memo may have frozen a degraded dynamic
+        # schema (e.g. introspection unavailable at parse time), so re-resolve
+        # against the live schema before rejecting. Designer mode keeps the memo to
+        # avoid eager introspection in the builder.
+        resolved = execution_mode? ? input(resolve: true) : input
+        return if resolved.valid?
+
+        errors.add(:input_mapping, "invalid: #{resolved.full_error_messages}")
+      end
+
+      def execution_mode?
+        runbook.present? && !runbook.designer_mode?
       end
 
       def outbound_connection_valid?

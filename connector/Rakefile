@@ -16,7 +16,11 @@ end
 
 namespace :connector do
   task :sync do
-    sdk_connectors = Dir.glob(File.join(__dir__, '../connector-sdk/spec/fixtures/*.rb'))
+    # Resolve the SDK fixture entrypoints (folder layout, flat fallback, folder wins)
+    # through the SDK's own discovery helper so the dedup rule lives in one place.
+    # Copy only the entrypoint .rb (flat) into the connector subproject's fixtures dir.
+    require_relative '../connector-sdk/spec/support/fixtures_helper'
+    sdk_connectors = fixture_entrypoints('*')
 
     connectors_directory = File.join(__dir__, 'spec/fixtures/connectors')
     FileUtils.mkdir_p(connectors_directory)

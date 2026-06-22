@@ -16,12 +16,13 @@ module IPaaS
             ruby_class.new(resolved_value.to_s, context.try(:encryptor))
           end
 
-          def valid?(value, _errors = [])
+          def valid?(value, errors = [])
             return true if value.blank?
             value = resolve(value) unless value.is_a?(IPaaS::Encryption::SecretString)
             IPaaS::Encryption::DataRowRecord.deserialize(value.encrypted)
             true
           rescue StandardError
+            errors << 'Expected an encrypted secret string value.'
             false
           end
 
