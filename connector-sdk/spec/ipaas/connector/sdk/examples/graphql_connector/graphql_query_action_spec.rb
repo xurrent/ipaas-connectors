@@ -28,7 +28,7 @@ describe 'GraphQL Query Action', :action do
 
   # Regression for request #78064178 (see SchemaClosureHelper).
   describe 'memory: after_update closure does not retain the parsed schema' do
-    before(:each) { action.cache_write('gql_schema', graphql_connector_introspection_schema, 3600) }
+    before(:each) { action.outbound_connection.cache_write('gql_schema', graphql_connector_introspection_schema, 3600) }
 
     it 'releases schema_data so the cached after_update proc does not pin the parsed schema' do
       schema = action.input_schema

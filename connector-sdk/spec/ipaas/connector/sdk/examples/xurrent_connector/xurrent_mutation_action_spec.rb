@@ -14,7 +14,7 @@ describe 'Xurrent Mutation Action', :action do
 
   # Regression for request #78064178 (see SchemaClosureHelper).
   describe 'memory: after_update closure does not retain the parsed schema' do
-    before(:each) { action.cache_write('gql_schema', introspection_schema, 3600) }
+    before(:each) { action.outbound_connection.cache_write('gql_schema', introspection_schema, 3600) }
 
     it 'releases schema_data so the cached after_update proc does not pin the parsed schema' do
       schema = action.input_schema
@@ -48,7 +48,7 @@ describe 'Xurrent Mutation Action', :action do
 
     context 'with cached schema' do
       before(:each) do
-        action.cache_write('gql_schema', introspection_schema, 3600)
+        action.outbound_connection.cache_write('gql_schema', introspection_schema, 3600)
       end
 
       it 'populates the mutation field with enum values and human-readable labels' do
@@ -281,8 +281,7 @@ describe 'Xurrent Mutation Action', :action do
       #    the mutation POST is stubbed, capturing what input reaches Xurrent.
       WebMock.reset!
       stub_introspection
-      a.cache_write('gql_schema', introspection_schema, 3600)
-      a.cache_write('_schema_present', true, 3600)
+      a.outbound_connection.cache_write('gql_schema', introspection_schema, 3600)
       received_input = nil
       stub_request(:post, graphql_endpoint)
         .with do |req|
@@ -371,8 +370,7 @@ describe 'Xurrent Mutation Action', :action do
       # Warm the cache (as a sibling Query would in production).
       WebMock.reset!
       stub_introspection
-      a.cache_write('gql_schema', introspection_schema, 3600)
-      a.cache_write('_schema_present', true, 3600)
+      a.outbound_connection.cache_write('gql_schema', introspection_schema, 3600)
       stub_request(:post, graphql_endpoint)
         .with { |req| !req.body.include?('__schema') && req.body.include?('requestCreate') }
         .to_return(
@@ -435,8 +433,7 @@ describe 'Xurrent Mutation Action', :action do
       expect(a.input_schema.field(:input).type).to eq(:nested) # schema resolved healthy
       expect(a.input).to be_valid # precondition: the memo the gate trusts is valid
 
-      a.cache_clear('gql_schema')
-      a.cache_clear('_schema_present')
+      a.outbound_connection.cache_clear('gql_schema')
       WebMock.reset!
       introspection_stub = stub_failing_introspection
 
@@ -453,8 +450,10 @@ describe 'Xurrent Mutation Action', :action do
       a = parse_mutation(rb, mapping_without_input)
       expect(a.input).not_to be_valid # precondition: the memo is invalid
 
-      a.cache_clear('gql_schema')
-      a.cache_clear('_schema_present')
+      a.outbound_connection.cache_clear('gql_schema')
+      # Clear the generation token so the invalid-memo re-resolution takes the cold
+      # path (a warm bundle would let the gate re-resolve without introspecting).
+      a.outbound_connection.cache_clear('gql_bundle_gen')
       WebMock.reset!
       introspection_stub = stub_failing_introspection
 
@@ -505,17 +504,18 @@ describe 'Xurrent Mutation Action', :action do
     end
 
     it 'fetches schema via introspection when cache is empty' do
-      @mutation_action.cache_clear('gql_schema')
-      @mutation_action.cache_clear('_schema_present')
+      @mutation_action.outbound_connection.cache_clear('gql_schema')
+      # Clear the generation token too: without it the warm bundle would serve the
+      # build and run without introspecting, so a truly empty cache has no generation.
+      @mutation_action.outbound_connection.cache_clear('gql_bundle_gen')
 
       introspection_stub = stub_introspection
       @mutation_action.run
 
-      # run triggers a fresh introspection call because cache was cleared
+      # run triggers a fresh introspection because the derived caches were cleared
       expect(introspection_stub).to have_been_requested
 
-      expect(@mutation_action.cache_read('gql_schema')).to be_present
-      expect(@mutation_action.cache_read('_schema_present')).to eq(true)
+      expect(@mutation_action.outbound_connection.cache_read('gql_schema')).to be_present
     end
 
     it 'skips introspection when schema is already cached' do

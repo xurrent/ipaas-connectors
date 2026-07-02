@@ -19,7 +19,7 @@ describe 'GraphQL Query Action with nested connection', :action do
     # Warm the schema cache so the input schema contains the 'notes' include
     # boolean when the input mapping is re-resolved at run start; with a cold
     # cache include_fields would be pruned and 'notes' never queried.
-    action.cache_write('gql_schema', graphql_connector_introspection_schema, 3600)
+    action.outbound_connection.cache_write('gql_schema', graphql_connector_introspection_schema, 3600)
 
     stub_graphql_connector_query(
       /requests/,

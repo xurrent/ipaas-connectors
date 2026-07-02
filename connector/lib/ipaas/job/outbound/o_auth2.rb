@@ -11,7 +11,7 @@ module IPaaS
                   :clear_oauth2_header_cache
 
         AUTHENTICATION_HEADER_CACHE_KEY = 'oauth2_authentication_header'.freeze
-        CUSTOMER_OAUTH2_ERROR_CODES = %w[invalid_client invalid_grant unauthorized_client].freeze
+        CUSTOMER_OAUTH2_ERROR_CODES = %w[invalid_client invalid_grant unauthorized_client invalid_scope].freeze
 
         LOCK_TTL_SECONDS     = IPaaS::Job::Lock::DEFAULT_TTL_SECONDS
         REFRESH_OPEN_TIMEOUT = 5

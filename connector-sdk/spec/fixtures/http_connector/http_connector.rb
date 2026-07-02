@@ -47,6 +47,7 @@ class HttpConnector < IPaaS::Connector::Definition
       | `client_id` | String | Yes | |
       | `client_secret` | Secret | Yes | |
       | `refresh_token` | String | Only when `grant_type = Refresh Token` | |
+      | `scope` | String | No | Space-separated OAuth 2 scope(s) to request, if the authorization server requires them |
 
       The connector exchanges credentials for a token at `authorization_url` and sends `Authorization: Bearer <access_token>` on the outbound request.
 

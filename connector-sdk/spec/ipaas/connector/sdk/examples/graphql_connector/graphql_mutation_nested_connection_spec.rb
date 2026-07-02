@@ -16,7 +16,7 @@ describe 'GraphQL Mutation Action with nested connection', :action do
     stub_graphql_connector_introspection
     # Warm the schema cache so the input mapping resolves against the
     # mutation-specific input schema when re-resolved at run start.
-    action.cache_write('gql_schema', graphql_connector_introspection_schema, 3600)
+    action.outbound_connection.cache_write('gql_schema', graphql_connector_introspection_schema, 3600)
 
     stub_graphql_connector_query(
       /requestUpdate/,

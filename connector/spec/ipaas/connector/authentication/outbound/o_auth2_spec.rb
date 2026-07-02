@@ -27,7 +27,7 @@ describe IPaaS::Connector::Authentication::Outbound::OAuth2 do
       expect(oauth2_field.label).to eq('OAuth 2')
       expect(oauth2_field.hint).not_to be_nil
       expect(oauth2_field.visibility).to eq('optional')
-      expect(oauth2_field.fields.size).to eq(5)
+      expect(oauth2_field.fields.size).to eq(6)
     end
 
     it 'should define the grant type field' do
@@ -51,6 +51,14 @@ describe IPaaS::Connector::Authentication::Outbound::OAuth2 do
       expect(access_token_url.label).to eq('Refresh token')
       expect(access_token_url.type).to eq(:string)
       expect(access_token_url.required).to be_falsey
+    end
+
+    it 'should define the scope field' do
+      scope_field = oauth2_field.field(:scope)
+      expect(scope_field.label).to eq('Scope')
+      expect(scope_field.type).to eq(:string)
+      expect(scope_field.required).to be_falsey
+      expect(scope_field.visibility).to eq('optional')
     end
 
     it 'should define the client ID field' do
@@ -167,6 +175,24 @@ describe IPaaS::Connector::Authentication::Outbound::OAuth2 do
         setup_oauth_server({ message: 'bad request' }, status: 400)
         expect { connection.authenticate_request(request) }
           .to raise_error(IPaaS::Error, 'Unable to authenticate to example.com (HTTP 400)')
+      end
+
+      it 'includes the scope in the token request body when configured' do
+        connection.config[:oauth2][:scope] = 'https://graph.microsoft.com/.default'
+        @expected_request_body[:scope] = 'https://graph.microsoft.com/.default'
+        setup_oauth_server({ access_token: 'am9objpzZWNyZXQ=', token_type: 'bearer' })
+
+        connection.authenticate_request(request)
+        expect(request.headers['Authorization']).to eq('Bearer am9objpzZWNyZXQ=')
+      end
+
+      it 'strips surrounding whitespace from the scope before sending' do
+        connection.config[:oauth2][:scope] = "  https://graph.microsoft.com/.default\n"
+        @expected_request_body[:scope] = 'https://graph.microsoft.com/.default'
+        setup_oauth_server({ access_token: 'am9objpzZWNyZXQ=', token_type: 'bearer' })
+
+        connection.authenticate_request(request)
+        expect(request.headers['Authorization']).to eq('Bearer am9objpzZWNyZXQ=')
       end
 
       it 'should raise an error when token type is mac' do
@@ -394,6 +420,15 @@ describe IPaaS::Connector::Authentication::Outbound::OAuth2 do
           refresh_token: connection.config[:oauth2][:refresh_token],
           grant_type: 'refresh_token',
         }
+      end
+
+      it 'includes the scope in the token request body when configured' do
+        connection.config[:oauth2][:scope] = 'offline_access https://graph.microsoft.com/.default'
+        @expected_request_body[:scope] = 'offline_access https://graph.microsoft.com/.default'
+        setup_oauth_server({ access_token: 'am9objpzZWNyZXQ=', token_type: 'bearer' })
+
+        connection.authenticate_request(request)
+        expect(request.headers['Authorization']).to eq('Bearer am9objpzZWNyZXQ=')
       end
 
       it 'requires refresh token to be configured' do

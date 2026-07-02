@@ -17,7 +17,7 @@ describe 'Xurrent Query Action', :action do
   # so the long-lived proc (stored on the cached Schema) would otherwise capture
   # the multi-MB parsed gql_schema per cached solution version and OOM the GUI.
   describe 'memory: after_update closure does not retain the parsed schema' do
-    before(:each) { action.cache_write('gql_schema', introspection_schema, 3600) }
+    before(:each) { action.outbound_connection.cache_write('gql_schema', introspection_schema, 3600) }
 
     it 'releases schema_data so the cached after_update proc does not pin the parsed schema' do
       schema = action.input_schema
@@ -75,7 +75,7 @@ describe 'Xurrent Query Action', :action do
     describe 'object field enumeration' do
       context 'with cached schema' do
         before(:each) do
-          action.cache_write('gql_schema', introspection_schema, 3600)
+          action.outbound_connection.cache_write('gql_schema', introspection_schema, 3600)
         end
 
         it 'populates the object field with humanized labels' do
@@ -276,17 +276,18 @@ describe 'Xurrent Query Action', :action do
     end
 
     it 'fetches schema via introspection when cache is empty' do
-      @query_action.cache_clear('gql_schema')
-      @query_action.cache_clear('_schema_present')
+      @query_action.outbound_connection.cache_clear('gql_schema')
+      # Clear the generation token too: without it the warm bundle would serve the
+      # build and run without introspecting, so a truly empty cache has no generation.
+      @query_action.outbound_connection.cache_clear('gql_bundle_gen')
 
       introspection_stub = stub_introspection
       @query_action.run
 
-      # run triggers a fresh introspection call because cache was cleared
+      # run triggers a fresh introspection because the derived caches were cleared
       expect(introspection_stub).to have_been_requested
 
-      expect(@action.cache_read('gql_schema')).to be_present
-      expect(@action.cache_read('_schema_present')).to eq(true)
+      expect(@action.outbound_connection.cache_read('gql_schema')).to be_present
     end
 
     it 'skips introspection when schema is already cached' do
@@ -308,6 +309,66 @@ describe 'Xurrent Query Action', :action do
         # run triggers a fresh introspection call
         expect(introspection_stub).to have_been_requested
       end
+    end
+  end
+
+  # The schema cache is scoped to the outbound connection, so distinct actions
+  # sharing one connection share a single introspection and stored schema. This
+  # is the point of the connection-scoped cache: ~20 actions on a connection no
+  # longer each introspect and store their own multi-MB copy.
+  describe 'connection-scoped schema shared across actions' do
+    let(:action_input) { { object: 'people' } }
+    let(:query_response) { { 'people' => { 'nodes' => [] } } }
+
+    # A second action on the SAME outbound connection but a different reference,
+    # so it has its own per-action store yet shares the connection-scoped cache.
+    def sibling_query_action(reference)
+      IPaaS::Connector::Action.parse(
+        runbook,
+        {
+          reference: reference,
+          outbound_connection: { uuid: outbound_connection.uuid },
+          action_template: { uuid: action_template_id },
+          input_mapping: field_mapping(action_input, schema: action_template.input_schema),
+        },
+      ).tap(&:input)
+    end
+
+    before(:each) do
+      stub_graphql_query(/people/, query_response)
+    end
+
+    it 'introspects once across two distinct actions on the same connection' do
+      first = sibling_query_action('action-one')
+      second = sibling_query_action('action-two')
+      # The two actions are distinct instances on one shared connection.
+      expect(first.reference).not_to eq(second.reference)
+      expect(first.outbound_connection).to be(second.outbound_connection)
+
+      first.run
+      second.run
+
+      # Across both actions' construction and runs, only one introspection fires:
+      # the first to touch the connection warms the shared schema, every later
+      # read (the second action and both runs) reuses it.
+      expect(introspection_request_count).to eq(1)
+    end
+
+    # Contrast: clearing the shared schema between the two runs forces the second
+    # action to re-introspect, proving the single attempt above is the shared
+    # cache at work, not a side effect of the WebMock registry.
+    it 'introspects again when the shared schema is cleared between actions' do
+      first = sibling_query_action('action-one')
+      first.run
+
+      outbound_connection.cache_clear('gql_schema')
+      # Also drop the generation token, or the warm bundle would let the second action
+      # build and run without introspecting; clearing it forces the cold path.
+      outbound_connection.cache_clear('gql_bundle_gen')
+
+      sibling_query_action('action-two').run
+
+      expect(introspection_request_count).to eq(2)
     end
   end
 

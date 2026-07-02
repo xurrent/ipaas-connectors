@@ -27,6 +27,13 @@ module XurrentIntrospectionHelper
     }
   end
 
+  # Total introspection (__schema) requests WebMock has recorded since the last reset.
+  def introspection_request_count
+    WebMock::RequestRegistry.instance.requested_signatures.hash
+                            .select { |signature, _count| signature.body.to_s.include?('__schema') }
+                            .values.sum
+  end
+
   def stub_introspection(endpoint: xurrent_graphql_endpoint)
     stub_request(:post, endpoint)
       .with { |req| req.body.include?('__schema') }

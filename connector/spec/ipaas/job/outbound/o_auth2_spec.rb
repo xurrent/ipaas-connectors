@@ -307,6 +307,28 @@ describe IPaaS::Job::Outbound::OAuth2 do
       include_examples 'raises CustomerCredentialsError', /unauthorized_client/
     end
 
+    context 'when the IdP returns 400 with invalid_scope' do
+      before do
+        stub_token_response(
+          status: 400,
+          body: { error: 'invalid_scope', error_description: 'AADSTS70011: The provided scope is not valid' }.to_json,
+        )
+      end
+
+      include_examples 'raises CustomerCredentialsError', /invalid_scope.*AADSTS70011/
+    end
+
+    context 'when the IdP returns 400 with invalid_request (generic, not a credentials error)' do
+      before do
+        stub_token_response(
+          status: 400,
+          body: { error: 'invalid_request', error_description: "AADSTS900144: missing 'scope'" }.to_json,
+        )
+      end
+
+      include_examples 'raises plain IPaaS::Error'
+    end
+
     context 'when the IdP returns 400 with unsupported_grant_type (not a credentials error)' do
       before { stub_token_response(status: 400, body: { error: 'unsupported_grant_type' }.to_json) }
       include_examples 'raises plain IPaaS::Error'

@@ -3,12 +3,41 @@ class GraphqlConnector < IPaaS::Connector::Definition
   GqlQuery = IPaaS::Job::GraphQL::QueryBuilder
   GqlFields = IPaaS::Job::GraphQL::FieldBuilder
   GqlResult = IPaaS::Job::GraphQL::Result
+  GqlArtifactCache = IPaaS::Job::GraphQL::ArtifactCache
   Humanize = IPaaS::Job::Humanize
   CompactHash = IPaaS::Job::CompactHash
 
   INTROSPECTION_FAILURE_TTL = 10.minutes # configuration errors cached for 10 minutes
   INTROSPECTION_TRANSIENT_FAILURE_TTL = 30.seconds # transient errors cached for 30 seconds
   INTROSPECTION_FAILURE_MESSAGE_LIMIT = 200 # cap on the length of the error message
+
+  # Cursor-pagination args the connection run handles positionally (first/after
+  # literals); never serialized into arg_type_refs nor passed as a runtime variable.
+  # A non-connection list query also drops `skip`, but a connection may still pass it,
+  # so `skip` stays in the bundle and the simple-query branch excludes it at run time.
+  CONNECTION_PAGINATION_ARGS = %w[first last before after].freeze
+  SIMPLE_PAGINATION_ARGS = %w[first last before after skip].freeze
+
+  # The static metadata tail every query/mutation output schema appends; rebuilt by
+  # the output block and never serialized into the bundle.
+  OUTPUT_STATIC_IDS = [:request_id].freeze
+
+  # Static top-level input fields the builder always rebuilds; never serialized. The
+  # query selector + pagination/refresh controls; the mutation selector + refresh. The
+  # dynamic remainder (query args + include_fields; mutation input + include_fields) is
+  # what collect_dynamic_descriptors captures so the warm input schema is field-identical.
+  QUERY_STATIC_INPUT_IDS = [:object, :page_size, :max_results, :refresh_schema].freeze
+  MUTATION_STATIC_INPUT_IDS = [:mutation, :refresh_schema].freeze
+
+  # Keys a stored bundle part must carry to be usable; a part missing any (an entry
+  # written by an older connector that shaped bundles differently) is ignored so run
+  # rebuilds from the schema instead of reading an incompatible shape.
+  BUNDLE_REQUIRED_KEYS = {
+    [:query, 'in'] => %w[is_connection is_list field_selection arg_type_refs input_fields].freeze,
+    [:query, 'out'] => %w[output_fields].freeze,
+    [:mutation, 'in'] => %w[input_type_name field_selection input_fields].freeze,
+    [:mutation, 'out'] => %w[output_fields].freeze,
+  }.freeze
 
   connector 'd5bbb2a2-4a95-4b49-b490-56711e4455f8' do
     name 'GraphQL Connector'
@@ -46,6 +75,77 @@ class GraphqlConnector < IPaaS::Connector::Definition
       ## Clearing the schema cache
       The GraphQL schema is cached after the first introspection. Check the **Refresh schema** option to force a refresh.
     DESC
+
+    # ──────────────────────────────────────────────
+    # Connector-level Helpers: Schema Cache Store
+    # ──────────────────────────────────────────────
+    # Defined before the actions so the eagerly-built input_schema finds them registered.
+    # Scoping the cache to the outbound connection lets all actions on it share one schema;
+    # a nil store (unconfigured action) no-ops.
+
+    helper :schema_cache_store do
+      action&.outbound_connection
+    end
+
+    helper :schema_cache_read do |key|
+      GqlArtifactCache.gql_cache_read(helpers.schema_cache_store, key)
+    end
+
+    helper :schema_cache_write do |key, value, ttl|
+      GqlArtifactCache.gql_cache_write(helpers.schema_cache_store, key, value, ttl)
+    end
+
+    helper :schema_cache_clear do |key|
+      GqlArtifactCache.gql_cache_clear(helpers.schema_cache_store, key)
+    end
+
+    # ──────────────────────────────────────────────
+    # Connector-level Helpers: Selection Digest Inputs
+    # ──────────────────────────────────────────────
+    # The bundle is keyed on these RESOLVED values, which is correct for any mapping source: a
+    # runtime-varying value just yields a different key (a fresh bundle, never stale), while a
+    # stable value reuses one.
+
+    helper :selection_value do |operation|
+      action.input&.[](operation == :query ? :object : :mutation)
+    end
+
+    # The resolved include_fields hash drives field selection and the include subtree.
+    # An explicit false leaf is preserved (the digest distinguishes {a: false} from {}).
+    helper :resolved_include_fields do
+      value = action.input&.[](:include_fields)
+      value.is_a?(Hash) ? value.to_hash : {}
+    end
+
+    helper :cacheable_selection? do |operation|
+      helpers.selection_value(operation).present?
+    end
+
+    # Only a present selection is cacheable; the required keys drive the fail-closed shape check.
+    helper :load_bundle do |operation, part|
+      next nil unless helpers.cacheable_selection?(operation)
+
+      GqlArtifactCache.gql_load_bundle(
+        helpers.schema_cache_store, operation, part,
+        selection_name: helpers.selection_value(operation),
+        include_fields: helpers.resolved_include_fields,
+        required_keys: BUNDLE_REQUIRED_KEYS.fetch([operation, part]),
+      )
+    end
+
+    # ──────────────────────────────────────────────
+    # Connector-level Helpers: Root-Field Options Cache
+    # ──────────────────────────────────────────────
+    # The selector enumeration is independent of the chosen object/include_fields, so it is
+    # shared by every query (resp. mutation) action on a connection, under the same generation.
+
+    helper :read_root_options do |operation|
+      GqlArtifactCache.gql_read_root_options(helpers.schema_cache_store, operation)
+    end
+
+    helper :write_root_options do |operation, options|
+      GqlArtifactCache.gql_write_root_options(helpers.schema_cache_store, operation, options)
+    end
 
     # ──────────────────────────────────────────────
     # Outbound Connection (API authentication)
@@ -217,32 +317,36 @@ class GraphqlConnector < IPaaS::Connector::Definition
       avatar '/assets/icons/graphql.svg'
       nested true
 
-      # Defined before input_schema (which runs eagerly at connector load) so the
-      # helper is registered when first called. schema_data stays local to this
-      # helper and is never captured by the after_update closure (on the cached Schema).
+      # Defined before input_schema (built eagerly at load) so it is registered. schema_data
+      # lives only in this frame, so the after_update closure never captures the parsed schema
+      # (which would pin the multi-MB blob per solution version and OOM).
       helper :build_query_input_fields do |schema|
         object_name = action.input&.[](:object)
-        schema_data = cache_read('gql_schema')
-        query_options = schema_data.present? ? GqlSchema.gql_list_root_fields(schema_data, 'query') : []
+        in_bundle = helpers.load_bundle(:query, 'in')
+        root_options = in_bundle && helpers.read_root_options(:query) # fail closed if evicted
 
-        if query_options.any?
-          schema.field :object, 'Query object', :string,
-                       enumeration: query_options,
-                       required: true
+        if in_bundle && root_options
+          # warm path: we have cached data, no need to read/process the (large) schema
+          helpers.build_query_static_object_field(schema, root_options)
+          helpers.restore_fields_from_descriptors(schema, in_bundle['input_fields'])
         else
-          schema.field :object, 'Query object', :string,
-                       hint: 'The GraphQL query field name.',
-                       notice: 'Outbound Connection is not configured correctly.',
-                       notice_type: 'error',
-                       notice_action: 'edit_connection',
-                       pattern: /\A[A-Za-z][A-Za-z0-9]*\z/,
-                       required: true
-        end
+          schema_data = helpers.schema_cache_read('gql_schema')
+          # Fall back to the cached root-field options for the selector enumeration when
+          # the schema has lapsed (it expires sooner than the bundle), so the dropdown is
+          # never served empty while a generation's derived caches are still warm.
+          query_options = if schema_data.present?
+                            GqlSchema.gql_list_root_fields(schema_data, 'query')
+                          else
+                            helpers.read_root_options(:query) || []
+                          end
+          helpers.build_query_static_object_field(schema, query_options.presence)
 
-        schema.field :include_fields, 'Include nested fields', :nested
-
-        if schema_data.present? && object_name.present?
-          helpers.add_input_fields_from_schema_data(schema, schema_data, object_name)
+          # Define include_fields early so its value is resolved in the first pass,
+          # making it available in action.input when after_update regenerates the output schema.
+          schema.field :include_fields, 'Include nested fields', :nested
+          if schema_data.present? && object_name.present?
+            helpers.add_input_fields_from_schema_data(schema, schema_data, object_name)
+          end
         end
 
         schema.field :page_size, 'Page size', :integer,
@@ -259,10 +363,89 @@ class GraphqlConnector < IPaaS::Connector::Definition
                            'Useful after schema changes in the GraphQL API.',
                      visibility: 'optional',
                      default: false
+
+        # On a cold cacheable build, write the 'in' bundle (run shape + dynamic input
+        # descriptors collected from this just-built schema) and the root options so
+        # later builds and runs take the warm path.
+        if !(in_bundle && root_options) && object_name.present? &&
+           helpers.cacheable_selection?(:query) && helpers.schema_cache_read('gql_schema').present?
+          schema_data = helpers.schema_cache_read('gql_schema')
+          helpers.write_bundle_part(:query, 'in', helpers.build_query_in_bundle(schema_data, object_name, schema))
+          helpers.persist_root_options(schema_data, :query)
+        end
+      end
+
+      # The object selector is static (never serialized into the bundle): the enum comes
+      # from the root-field options on the warm path, the schema on a miss, or the
+      # configure-connection notice when neither is available.
+      helper :build_query_static_object_field do |schema, options|
+        if options.present?
+          schema.field :object, 'Query object', :string,
+                       enumeration: options,
+                       required: true
+        else
+          schema.field :object, 'Query object', :string,
+                       hint: 'The GraphQL query field name.',
+                       notice: 'Outbound Connection is not configured correctly.',
+                       notice_type: 'error',
+                       notice_action: 'edit_connection',
+                       pattern: /\A[A-Za-z][A-Za-z0-9]*\z/,
+                       required: true
+        end
+      end
+
+      # The 'in' bundle: the run shape plus the dynamic input descriptors collected from
+      # the just-built LIVE input schema. Collecting from the live schema keeps the warm
+      # input build structurally identical to the cold one with no rebuild.
+      helper :build_query_in_bundle do |schema_data, object_name, input_schema|
+        helpers.build_query_bundle_shape(schema_data, object_name).tap do |bundle|
+          bundle['input_fields'] = helpers.collect_dynamic_descriptors(input_schema, QUERY_STATIC_INPUT_IDS)
+        end
+      end
+
+      # The schema-derived run inputs (connection/list shape, type names, field selection,
+      # and the type-ref of every non-pagination arg) that run assembles the final query
+      # and variables from without re-parsing the schema.
+      helper :build_query_bundle_shape do |schema_data, object_name|
+        node_type_name = GqlSchema.gql_resolve_connection_node_type(schema_data, 'query', object_name)
+        if node_type_name.present?
+          {
+            'is_connection' => true,
+            # Always present so the bundle-shape check can require it; a connection result
+            # is flattened by process_connection_result, so run never reads is_list here.
+            'is_list' => false,
+            'node_type_name' => node_type_name,
+            'field_selection' => GqlQuery.gql_build_field_selection(schema_data, node_type_name, 0,
+                                                                    include_data: action.input),
+            'arg_type_refs' => helpers.collect_arg_type_refs(schema_data, object_name),
+          }
+        else
+          return_type_name = GqlSchema.gql_resolve_return_type_name(schema_data, 'query', object_name)
+          {
+            'is_connection' => false,
+            'is_list' => helpers.list_return_type?(schema_data, object_name),
+            'return_type_name' => return_type_name,
+            'field_selection' => GqlQuery.gql_build_field_selection(schema_data, return_type_name, 0,
+                                                                    include_data: action.input),
+            'arg_type_refs' => helpers.collect_arg_type_refs(schema_data, object_name),
+          }
+        end
+      end
+
+      # The type-ref string of every root-field arg except the cursor-pagination args
+      # (handled positionally by run), keyed by arg name, so run builds var defs from the
+      # bundle. `skip` is kept (a connection may pass it); the simple branch drops it.
+      helper :collect_arg_type_refs do |schema_data, object_name|
+        gql_args = GqlSchema.gql_find_root_field(schema_data, 'query', object_name)&.[]('args') || []
+        gql_args.each_with_object({}) do |arg, refs|
+          next if CONNECTION_PAGINATION_ARGS.include?(arg['name'])
+
+          refs[arg['name']] = GqlQuery.gql_type_ref_string(arg['type'])
+        end
       end
 
       input_schema do
-        # Built in a helper so the parsed schema_data stays local to it and is never
+        # Built in a helper so schema_data stays out of this block's binding and is never
         # captured by the after_update closure below (stored on the cached Schema).
         helpers.build_query_input_fields(self)
         after_update do |_fields|
@@ -272,14 +455,25 @@ class GraphqlConnector < IPaaS::Connector::Definition
 
       output_schema 'query_result' do
         object_name = action.input&.[](:object)
+        out_bundle = object_name.present? ? helpers.load_bundle(:query, 'out') : nil
 
-        if object_name.present?
-          schema_data = cache_read('gql_schema')
+        if out_bundle
+          helpers.restore_fields_from_descriptors(self, out_bundle['output_fields'])
+        elsif object_name.present?
+          schema_data = helpers.schema_cache_read('gql_schema')
           helpers.add_query_fields_from_schema_data(self, schema_data, object_name) if schema_data.present?
         end
 
         field :request_id, 'Request ID', :string,
               visibility: 'optional'
+
+        # On a cold cacheable build, write the 'out' bundle (dynamic output descriptors
+        # collected from this just-built schema) so later builds and runs restore it.
+        if !out_bundle && object_name.present? && helpers.cacheable_selection?(:query) &&
+           helpers.schema_cache_read('gql_schema').present?
+          helpers.write_bundle_part(:query, 'out',
+                                    { 'output_fields' => helpers.collect_dynamic_descriptors(self, OUTPUT_STATIC_IDS) })
+        end
       end
 
       iteration_state_schema do
@@ -288,16 +482,16 @@ class GraphqlConnector < IPaaS::Connector::Definition
       end
 
       run do
-        schema_data = helpers.ensure_schema_cached
         object_name = input[:object]
-        node_type_name = GqlSchema.gql_resolve_connection_node_type(schema_data, 'query', object_name)
-        is_connection = node_type_name.present?
-        is_list = !is_connection && helpers.list_return_type?(schema_data, object_name)
+        # Warm path: assemble the query from the 'in' bundle without parsing the schema.
+        # Miss / non-cacheable: build from the shared schema and write the bundle.
+        bundle = helpers.load_bundle(:query, 'in') || helpers.build_query_run_bundle(object_name)
+        is_connection = bundle['is_connection']
 
         gql_output = if is_connection
-                       helpers.run_connection_query(schema_data, object_name, node_type_name)
+                       helpers.run_connection_query(bundle, object_name)
                      else
-                       helpers.run_simple_query(schema_data, object_name)
+                       helpers.run_simple_query(bundle, object_name)
                      end
 
         data = gql_output[:data]
@@ -310,7 +504,7 @@ class GraphqlConnector < IPaaS::Connector::Definition
           fail_job!("No data returned for '#{object_name}'") if object_data.blank?
 
           # flatten nested connections so the data matches the generated schema
-          if is_list
+          if bundle['is_list']
             result[:nodes] = GqlResult.gql_flatten_nodes(object_data)
           elsif object_data.is_a?(Hash)
             # connection-shaped results route to process_connection_result,
@@ -320,6 +514,25 @@ class GraphqlConnector < IPaaS::Connector::Definition
         end
 
         [{ output: result, schema_reference: 'query_result' }]
+      end
+
+      # Miss path for run (the schema-regeneration warm-up did not run, e.g. a cold
+      # worker whose parse-time introspection failed): introspect, build the shape run
+      # needs, and warm the 'in' bundle + root options from the live input schema so
+      # later iterations and actions read it without re-parsing.
+      helper :build_query_run_bundle do |object_name|
+        schema_data = helpers.ensure_schema_cached
+        if object_name.present? && helpers.cacheable_selection?(:query)
+          # The parse-time build may have run without a schema (a cold worker whose
+          # introspection then failed), leaving a degraded input/output schema. Now that
+          # the schema is available, regenerate both so they write correct 'in'/'out'
+          # bundles and root options, then restore the run shape from the fresh 'in'.
+          action.regenerate_schema(action.output_schema('query_result'))
+          action.regenerate_schema(action.input_schema)
+          bundle = helpers.load_bundle(:query, 'in')
+          next bundle if bundle
+        end
+        helpers.build_query_bundle_shape(schema_data, object_name)
       end
 
       helper :add_input_fields_from_schema_data do |schema, schema_data, object_name|
@@ -396,31 +609,18 @@ class GraphqlConnector < IPaaS::Connector::Definition
         page_size
       end
 
-      helper :run_connection_query do |schema_data, object_name, node_type_name|
-        root_field = GqlSchema.gql_find_root_field(schema_data, 'query', object_name)
-        gql_args = root_field&.[]('args') || []
-        field_selection = GqlQuery.gql_build_field_selection(schema_data, node_type_name, 0, include_data: input)
+      # field_selection and the arg type-refs come from the bundle (built once from the
+      # schema); the page_size/cursor literals and the present?/compact_hash variable
+      # gates are assembled here from live runtime values.
+      helper :run_connection_query do |bundle, object_name|
+        field_selection = bundle['field_selection']
 
-        var_defs = []
         query_params = ["first: #{helpers.effective_page_size}"]
-        variables = {}
-
         cursor = iteration_state_value(:end_cursor)
         query_params << %(after: "#{cursor}") if cursor.present?
 
-        gql_args.each do |arg|
-          arg_name = arg['name']
-          next if %w[first last before after].include?(arg_name)
-          next if input[arg_name.to_sym].blank?
-
-          arg_value = input[arg_name.to_sym]
-          arg_value = CompactHash.compact_hash(arg_value) if arg_value.is_a?(Hash)
-          next if arg_value.blank?
-
-          var_defs << "$#{arg_name}: #{GqlQuery.gql_type_ref_string(arg['type'])}"
-          query_params << "#{arg_name}: $#{arg_name}"
-          variables[arg_name] = arg_value
-        end
+        var_defs, arg_params, variables = helpers.build_arg_clauses(bundle, CONNECTION_PAGINATION_ARGS)
+        arg_params.each { |param| query_params << param }
 
         var_clause = var_defs.any? ? "(#{var_defs.join(', ')})" : ''
         query = <<~GRAPHQL
@@ -434,35 +634,38 @@ class GraphqlConnector < IPaaS::Connector::Definition
         helpers.graphql_call(query, variables.presence)
       end
 
-      helper :run_simple_query do |schema_data, object_name|
-        return_type_name = GqlSchema.gql_resolve_return_type_name(schema_data, 'query', object_name)
-        field_selection = GqlQuery.gql_build_field_selection(schema_data, return_type_name, 0, include_data: input)
+      helper :run_simple_query do |bundle, object_name|
+        field_selection = bundle['field_selection']
 
-        root_field = GqlSchema.gql_find_root_field(schema_data, 'query', object_name)
-        gql_args = root_field&.[]('args') || []
+        var_defs, query_params, variables = helpers.build_arg_clauses(bundle, SIMPLE_PAGINATION_ARGS)
 
+        var_clause = var_defs.any? ? "(#{var_defs.join(', ')})" : ''
+        args_clause = query_params.any? ? "(#{query_params.join(', ')})" : ''
+        query = "query#{var_clause} { #{object_name}#{args_clause} { #{field_selection} } }"
+        helpers.graphql_call(query, variables.presence)
+      end
+
+      # Builds [var_defs, query_params, variables] from the bundle's arg_type_refs and the
+      # live input values, skipping pagination args and blanks (after compacting hashes).
+      helper :build_arg_clauses do |bundle, skip_args|
         var_defs = []
         query_params = []
         variables = {}
 
-        gql_args.each do |arg|
-          arg_name = arg['name']
-          next if %w[first last before after skip].include?(arg_name)
+        (bundle['arg_type_refs'] || {}).each do |arg_name, type_ref|
+          next if skip_args.include?(arg_name)
           next if input[arg_name.to_sym].blank?
 
           arg_value = input[arg_name.to_sym]
           arg_value = CompactHash.compact_hash(arg_value) if arg_value.is_a?(Hash)
           next if arg_value.blank?
 
-          var_defs << "$#{arg_name}: #{GqlQuery.gql_type_ref_string(arg['type'])}"
+          var_defs << "$#{arg_name}: #{type_ref}"
           query_params << "#{arg_name}: $#{arg_name}"
           variables[arg_name] = arg_value
         end
 
-        var_clause = var_defs.any? ? "(#{var_defs.join(', ')})" : ''
-        args_clause = query_params.any? ? "(#{query_params.join(', ')})" : ''
-        query = "query#{var_clause} { #{object_name}#{args_clause} { #{field_selection} } }"
-        helpers.graphql_call(query, variables.presence)
+        [var_defs, query_params, variables]
       end
 
       helper :process_connection_result do |data, object_name, result|
@@ -521,17 +724,66 @@ class GraphqlConnector < IPaaS::Connector::Definition
       DESC
       avatar '/assets/icons/graphql.svg'
 
-      # Defined before input_schema (which runs eagerly at connector load) so the
-      # helper is registered when first called. schema_data stays local to this
-      # helper and is never captured by the after_update closure (on the cached Schema).
+      # Defined before input_schema (which runs eagerly at connector load) so the helper
+      # is registered when first called. schema_data and the bundle stay local to this
+      # helper and are never captured by the after_update closure (which lives on the
+      # cached Schema) — see build_query_input_fields above.
       helper :build_mutation_input_fields do |schema|
         mutation_name = action.input&.[](:mutation)
-        schema_data = cache_read('gql_schema')
-        mutation_options = schema_data.present? ? GqlSchema.gql_list_root_fields(schema_data, 'mutation') : []
+        in_bundle = helpers.load_bundle(:mutation, 'in')
+        root_options = in_bundle && helpers.read_root_options(:mutation) # fail closed if evicted
 
-        if mutation_options.any?
+        if in_bundle && root_options
+          # warm path: we have cached data, no need to read/process the (large) schema
+          helpers.build_mutation_static_field(schema, root_options)
+          helpers.restore_fields_from_descriptors(schema, in_bundle['input_fields'])
+        else
+          schema_data = helpers.schema_cache_read('gql_schema')
+          # Fall back to the cached root-field options for the selector enumeration when
+          # the schema has lapsed (it expires sooner than the bundle), so the dropdown is
+          # never served empty while a generation's derived caches are still warm.
+          mutation_options = if schema_data.present?
+                               GqlSchema.gql_list_root_fields(schema_data, 'mutation')
+                             else
+                               helpers.read_root_options(:mutation) || []
+                             end
+          helpers.build_mutation_static_field(schema, mutation_options.presence)
+
+          # Define include_fields early so its value is resolved in the first pass
+          schema.field :include_fields, 'Include nested fields', :nested
+          if schema_data.present? && mutation_name.present?
+            helpers.add_mutation_input_fields(schema, schema_data, mutation_name)
+          else
+            schema.field :input, 'Input', :hash,
+                         hint: 'The mutation input variables as a JSON object.',
+                         required: true
+          end
+        end
+
+        schema.field :refresh_schema, 'Refresh schema', :boolean,
+                     hint: 'Check to clear the cached GraphQL schema and re-fetch it. ' \
+                           'Useful after schema changes in the GraphQL API.',
+                     visibility: 'optional',
+                     default: false
+
+        # On a cold cacheable build, write the 'in' bundle (run shape + dynamic input
+        # descriptors collected from this just-built schema) and the root options.
+        if !(in_bundle && root_options) && mutation_name.present? &&
+           helpers.cacheable_selection?(:mutation) && helpers.schema_cache_read('gql_schema').present?
+          schema_data = helpers.schema_cache_read('gql_schema')
+          helpers.write_bundle_part(:mutation, 'in',
+                                    helpers.build_mutation_in_bundle(schema_data, mutation_name, schema))
+          helpers.persist_root_options(schema_data, :mutation)
+        end
+      end
+
+      # The mutation selector is static (never serialized into the bundle): the enum comes
+      # from the root-field options on the warm path, the schema on a miss, or the
+      # configure-connection notice when neither is available.
+      helper :build_mutation_static_field do |schema, options|
+        if options.present?
           schema.field :mutation, 'Mutation', :string,
-                       enumeration: mutation_options,
+                       enumeration: options,
                        required: true
         else
           schema.field :mutation, 'Mutation', :string,
@@ -542,22 +794,21 @@ class GraphqlConnector < IPaaS::Connector::Definition
                        pattern: /\A[A-Za-z][A-Za-z0-9]*\z/,
                        required: true
         end
+      end
 
-        schema.field :include_fields, 'Include nested fields', :nested
-
-        if schema_data.present? && mutation_name.present?
-          helpers.add_mutation_input_fields(schema, schema_data, mutation_name)
-        else
-          schema.field :input, 'Input', :hash,
-                       hint: 'The mutation input variables as a JSON object.',
-                       required: true
-        end
-
-        schema.field :refresh_schema, 'Refresh schema', :boolean,
-                     hint: 'Check to clear the cached GraphQL schema and re-fetch it. ' \
-                           'Useful after schema changes in the GraphQL API.',
-                     visibility: 'optional',
-                     default: false
+      # The 'in' bundle: the run shape (input_type_name + field_selection built from the
+      # merged mutation include_data) plus the dynamic input descriptors collected from
+      # the just-built LIVE input schema. Collecting from the live schema keeps the warm
+      # input build structurally identical to the cold one with no rebuild.
+      helper :build_mutation_in_bundle do |schema_data, mutation_name, input_schema|
+        return_type_name = GqlSchema.gql_resolve_return_type_name(schema_data, 'mutation', mutation_name)
+        include_data = helpers.mutation_include_data(schema_data, return_type_name)
+        {
+          'input_type_name' => GqlSchema.gql_mutation_input_type_name(schema_data, mutation_name),
+          'field_selection' => GqlQuery.gql_build_field_selection(schema_data, return_type_name, 0,
+                                                                  include_data: include_data),
+          'input_fields' => helpers.collect_dynamic_descriptors(input_schema, MUTATION_STATIC_INPUT_IDS),
+        }
       end
 
       input_schema do
@@ -571,19 +822,34 @@ class GraphqlConnector < IPaaS::Connector::Definition
 
       output_schema 'mutation_result' do
         mutation_name = action.input&.[](:mutation)
+        out_bundle = mutation_name.present? ? helpers.load_bundle(:mutation, 'out') : nil
 
-        if mutation_name.present?
-          schema_data = cache_read('gql_schema')
+        if out_bundle
+          helpers.restore_fields_from_descriptors(self, out_bundle['output_fields'])
+        elsif mutation_name.present?
+          schema_data = helpers.schema_cache_read('gql_schema')
           helpers.add_mutation_output_fields(self, schema_data, mutation_name) if schema_data.present?
         end
 
         field :request_id, 'Request ID', :string,
               visibility: 'optional'
+
+        # On a cold cacheable build, write the 'out' bundle (dynamic output descriptors
+        # collected from this just-built schema, including the always-present errors
+        # field) so later builds and runs restore it.
+        if !out_bundle && mutation_name.present? && helpers.cacheable_selection?(:mutation) &&
+           helpers.schema_cache_read('gql_schema').present?
+          helpers.write_bundle_part(:mutation, 'out',
+                                    { 'output_fields' => helpers.collect_dynamic_descriptors(self, OUTPUT_STATIC_IDS) })
+        end
       end
 
       run do
         mutation_name = input[:mutation]
-        gql_output = helpers.run_mutation_query(mutation_name)
+        # Warm path: assemble the mutation from the 'in' bundle without parsing the schema.
+        # Miss / non-cacheable: build from the shared schema and write the bundle.
+        bundle = helpers.load_bundle(:mutation, 'in') || helpers.build_mutation_run_bundle(mutation_name)
+        gql_output = helpers.run_mutation_query(mutation_name, bundle)
         mutation_data = gql_output.delete(:data)[mutation_name]
         fail_job!("No data returned for mutation '#{mutation_name}'") if mutation_data.blank?
 
@@ -596,6 +862,31 @@ class GraphqlConnector < IPaaS::Connector::Definition
         # (mutation payloads are object types, so the flattened value stays a hash)
         result = gql_output.merge!(GqlResult.gql_flatten_nodes(mutation_data))
         [{ output: result, schema_reference: 'mutation_result' }]
+      end
+
+      # Miss path for run (the schema-regeneration warm-up did not run, e.g. a cold worker
+      # whose parse-time introspection failed): introspect, build the run shape, and warm
+      # the 'in' bundle + root options from the live input schema so later runs and actions
+      # read it without re-parsing.
+      helper :build_mutation_run_bundle do |mutation_name|
+        schema_data = helpers.ensure_schema_cached
+        if mutation_name.present? && helpers.cacheable_selection?(:mutation)
+          # The parse-time build may have run without a schema (a cold worker whose
+          # introspection then failed), leaving a degraded input/output schema. Now that
+          # the schema is available, regenerate both so they write correct 'in'/'out'
+          # bundles and root options, then restore the run shape from the fresh 'in'.
+          action.regenerate_schema(action.output_schema('mutation_result'))
+          action.regenerate_schema(action.input_schema)
+          bundle = helpers.load_bundle(:mutation, 'in')
+          next bundle if bundle
+        end
+        return_type_name = GqlSchema.gql_resolve_return_type_name(schema_data, 'mutation', mutation_name)
+        include_data = helpers.mutation_include_data(schema_data, return_type_name)
+        {
+          'input_type_name' => GqlSchema.gql_mutation_input_type_name(schema_data, mutation_name),
+          'field_selection' => GqlQuery.gql_build_field_selection(schema_data, return_type_name, 0,
+                                                                  include_data: include_data),
+        }
       end
 
       helper :add_mutation_input_fields do |schema, schema_data, mutation_name|
@@ -638,18 +929,11 @@ class GraphqlConnector < IPaaS::Connector::Definition
         end
       end
 
-      helper :run_mutation_query do |mutation_name|
-        schema_data = helpers.ensure_schema_cached
-        return_type_name = GqlSchema.gql_resolve_return_type_name(schema_data, 'mutation', mutation_name)
-        input_type_name = GqlSchema.gql_mutation_input_type_name(schema_data, mutation_name)
-
-        include_data = helpers.mutation_include_data(schema_data, return_type_name)
-        field_selection = GqlQuery.gql_build_field_selection(
-          schema_data, return_type_name, 0,
-          include_data: include_data
-        )
-
-        mutation = "mutation($input: #{input_type_name}!) { #{mutation_name}(input: $input) { #{field_selection} } }"
+      # input_type_name and field_selection come from the bundle (built once from the
+      # schema); the input value is passed as a variable so it never touches the text.
+      helper :run_mutation_query do |mutation_name, bundle|
+        mutation = "mutation($input: #{bundle['input_type_name']}!) " \
+                   "{ #{mutation_name}(input: $input) { #{bundle['field_selection']} } }"
         helpers.graphql_call(mutation, { input: input[:input] })
       end
 
@@ -673,35 +957,44 @@ class GraphqlConnector < IPaaS::Connector::Definition
     # Connector-level Helpers: Schema Introspection
     # ──────────────────────────────────────────────
 
+    # Whether our current configuration is fully warm, so regeneration can skip the schema fetch.
+    helper :warm_for_regeneration? do |operation, selection_field|
+      GqlArtifactCache.gql_warm_for_regeneration?(
+        helpers.schema_cache_store, operation,
+        selection_present: action.input&.[](selection_field).present?,
+        selection_name: helpers.selection_value(operation),
+        include_fields: helpers.resolved_include_fields,
+        required_keys_in: BUNDLE_REQUIRED_KEYS.fetch([operation, 'in']),
+        required_keys_out: BUNDLE_REQUIRED_KEYS.fetch([operation, 'out']),
+      )
+    end
+
     helper :refresh_dynamic_schemas do |context, selection_field, output_schema_ref|
       if action.input&.[](:refresh_schema)
-        cache_clear('gql_schema')
-        cache_clear('_schema_present')
-        cache_clear(helpers.introspection_failure_cache_key)
+        GqlArtifactCache.gql_invalidate(helpers.schema_cache_store,
+                                        'gql_schema', helpers.introspection_failure_cache_key)
       end
-      begin
-        helpers.ensure_schema_cached
-      rescue StandardError => e
-        log("Schema introspection failed: #{e.message}")
+      operation = selection_field == :object ? :query : :mutation
+      unless helpers.warm_for_regeneration?(operation, selection_field)
+        begin
+          helpers.ensure_schema_cached
+        rescue StandardError => e
+          log("Schema introspection failed: #{e.message}")
+        end
       end
       context.regenerate_schema(context.output_schema(output_schema_ref)) if action.input&.[](selection_field).present?
       context.regenerate_schema(context.input_schema)
     end
 
+    # A present gql_schema is the single source of truth; an absent one re-fetches.
     helper :ensure_schema_cached do
-      next cache_read('gql_schema') if cache_read('_schema_present') == true
-
-      cached = cache_read('gql_schema')
-      if cached.present?
-        cache_write('_schema_present', true, 3600)
-        next cached
-      end
+      cached = helpers.schema_cache_read('gql_schema')
+      next cached if cached.present?
 
       schema_data = helpers.fetch_schema
       fail_job!('No schema data available. Configure a schema source in the outbound connection.') if schema_data.blank?
 
-      cache_write('gql_schema', schema_data, 3600)
-      cache_write('_schema_present', true, 3600)
+      helpers.schema_cache_write('gql_schema', schema_data, 3600)
       schema_data
     end
 
@@ -721,7 +1014,7 @@ class GraphqlConnector < IPaaS::Connector::Definition
     # schema mode makes no HTTP call and is never suppressed by a cached failure.
     helper :fetch_schema_via_introspection do
       # failures are cached to limit the number of API calls
-      cached_failure = cache_read(helpers.introspection_failure_cache_key)
+      cached_failure = helpers.schema_cache_read(helpers.introspection_failure_cache_key)
       fail_job!(cached_failure) if cached_failure.present?
 
       response = begin
@@ -757,7 +1050,7 @@ class GraphqlConnector < IPaaS::Connector::Definition
     # re-logged on every cache hit for the TTL; the message never contains credentials.
     helper :record_introspection_failure do |message, ttl|
       bounded = message.to_s[0, INTROSPECTION_FAILURE_MESSAGE_LIMIT]
-      cache_write(helpers.introspection_failure_cache_key, bounded, ttl)
+      helpers.schema_cache_write(helpers.introspection_failure_cache_key, bounded, ttl)
       fail_job!(bounded)
     end
 
@@ -829,6 +1122,36 @@ class GraphqlConnector < IPaaS::Connector::Definition
       else
         fail_job!('Unrecognized schema format. Expected introspection result with __schema or types.')
       end
+    end
+
+    # ──────────────────────────────────────────────
+    # Connector-level Helpers: Schema Field Caching
+    # ──────────────────────────────────────────────
+    # Serialize/restore live in the shared FieldBuilder; the static-id lists stay connector-specific.
+
+    helper :collect_dynamic_descriptors do |schema, static_ids|
+      GqlFields.gql_collect_dynamic_descriptors(schema, static_ids)
+    end
+
+    helper :restore_fields_from_descriptors do |target, descriptors|
+      GqlFields.gql_restore_fields_from_descriptors(target, descriptors)
+    end
+
+    # Writes one bundle part ('in' shape+input descriptors, or 'out' output descriptors)
+    # under the current generation, establishing the generation when absent. Each schema
+    # block writes its own part from its live schema. Returns the bundle.
+    helper :write_bundle_part do |operation, part, bundle|
+      GqlArtifactCache.gql_write_bundle_part(
+        helpers.schema_cache_store, operation, part,
+        selection_name: helpers.selection_value(operation),
+        include_fields: helpers.resolved_include_fields, bundle: bundle,
+      )
+    end
+
+    # Records the root-field options (selector enumeration) under the current generation
+    # so the warm input-schema build restores the selector without reading the schema.
+    helper :persist_root_options do |schema_data, operation|
+      helpers.write_root_options(operation, GqlSchema.gql_list_root_fields(schema_data, operation.to_s))
     end
 
     # ──────────────────────────────────────────────

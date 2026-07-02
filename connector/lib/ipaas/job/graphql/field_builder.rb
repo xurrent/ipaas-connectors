@@ -5,7 +5,8 @@ module IPaaS
         extend IPaaS::Connector::Common::ProcRules::ProcSafe
 
         proc_safe :gql_add_dynamic_fields, :gql_add_dynamic_input_fields,
-                  :gql_build_order_subfields, :gql_update_include_fields_input
+                  :gql_build_order_subfields, :gql_update_include_fields_input,
+                  :gql_collect_dynamic_descriptors, :gql_restore_fields_from_descriptors
 
         class << self
           def gql_add_dynamic_fields(target, schema_data, type_name, depth, include_data: nil)
@@ -56,6 +57,30 @@ module IPaaS
             populate_include_booleans(include_field, schema_data, type_names, values, depth)
           end
 
+          # --- Field descriptors (bundle serialize/restore) ---
+
+          # Excludes the static ids the builder always rebuilds, serializing only the dynamic fields.
+          def gql_collect_dynamic_descriptors(schema, static_ids)
+            gql_collect_field_descriptors(schema.fields.reject { |f| static_ids.include?(f.id) })
+          end
+
+          # Paired with +gql_restore_fields_from_descriptors+ so the cold build and warm restore
+          # produce the same fields.
+          def gql_collect_field_descriptors(fields)
+            fields.map { |f| field_descriptor(f) }
+          end
+
+          # The +default+ round-trip preserves an explicit +false+ while an absent default
+          # restores as +nil+ (see +descriptor_opts+).
+          def gql_restore_fields_from_descriptors(target, descriptors)
+            descriptors.each do |desc|
+              target.field desc['id'].to_sym, desc['label'], desc['type'].to_sym, **descriptor_opts(desc)
+              next if desc['fields'].blank?
+
+              gql_restore_fields_from_descriptors(target.field(desc['id'].to_sym), desc['fields'])
+            end
+          end
+
           # Extracts the list of included field names from the boolean hash structure.
           def extract_included_field_names(include_data)
             include_fields = include_data&.[](:include_fields)
@@ -77,6 +102,52 @@ module IPaaS
           end
 
           private
+
+          # --- Field descriptor helpers ---
+
+          def field_descriptor(field)
+            desc = { 'id' => field.id.to_s, 'label' => field.label, 'type' => field.type.to_s }
+            desc.merge!(optional_descriptor_attrs(field))
+            desc.merge!(nested_descriptor_attrs(field))
+          end
+
+          def optional_descriptor_attrs(field)
+            attrs = {}
+            attrs['array'] = true if field.array
+            attrs['required'] = true if field.required
+            attrs['default'] = field.default unless field.default.nil? # only when set, so warm matches cold
+            attrs['hint'] = field.hint if field.hint.present?
+            attrs['visibility'] = field.visibility if non_default_visibility?(field)
+            attrs
+          end
+
+          def nested_descriptor_attrs(field)
+            attrs = {}
+            attrs['enumeration'] = serialize_enumeration(field.enumeration) if field.enumeration.present?
+            sub_fields = field.fields
+            attrs['fields'] = gql_collect_field_descriptors(sub_fields) if sub_fields.is_a?(Array) && sub_fields.any?
+            attrs
+          end
+
+          def non_default_visibility?(field)
+            !field.visibility.nil? && field.visibility != 'visible'
+          end
+
+          def serialize_enumeration(enumeration)
+            enumeration.map { |e| { 'id' => e[:id].to_s, 'label' => e[:label].to_s } }
+          end
+
+          def descriptor_opts(desc)
+            opts = {}
+            %w[array required hint visibility].each { |k| opts[k.to_sym] = desc[k] if desc[k] }
+            opts[:default] = desc['default'] if desc.key?('default') # key check preserves an explicit false
+            opts[:enumeration] = restore_enumeration(desc['enumeration']) if desc['enumeration'].present?
+            opts
+          end
+
+          def restore_enumeration(enumeration)
+            enumeration.map { |e| { id: e['id'], label: e['label'] } }
+          end
 
           # --- Order fields ---
 

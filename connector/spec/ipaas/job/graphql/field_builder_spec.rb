@@ -407,4 +407,137 @@ describe IPaaS::Job::GraphQL::FieldBuilder do
       expect(described_class.extract_sub_include(nil, 'anything')).to eq({})
     end
   end
+
+  describe '.gql_collect_dynamic_descriptors' do
+    let(:schema) do
+      IPaaS::Connector::Schema.new('reference') do
+        field :object, 'Object', :string
+        field :name, 'Name', :string
+        field :page_size, 'Page size', :integer
+      end
+    end
+
+    it 'serializes only the fields not in the static-id list' do
+      descriptors = described_class.gql_collect_dynamic_descriptors(schema, [:object, :page_size])
+      expect(descriptors.map { |d| d['id'] }).to eq(['name'])
+    end
+
+    it 'serializes all fields when the static-id list is empty' do
+      descriptors = described_class.gql_collect_dynamic_descriptors(schema, [])
+      expect(descriptors.map { |d| d['id'] }).to eq(%w[object name page_size])
+    end
+  end
+
+  describe '.gql_collect_field_descriptors' do
+    let(:schema) do
+      IPaaS::Connector::Schema.new('reference') do
+        field :name, 'Name', :string, required: true
+        field :flag, 'Flag', :boolean, default: false, visibility: 'optional'
+        field :status, 'Status', :string, enumeration: %w[open closed]
+        field :team, 'Team', :nested do
+          field :team_name, 'Team Name', :string
+        end
+      end
+    end
+
+    let(:descriptors) { described_class.gql_collect_field_descriptors(schema.fields) }
+
+    it 'serializes id, label, type, and required' do
+      name = descriptors.detect { |d| d['id'] == 'name' }
+      expect(name).to include('id' => 'name', 'label' => 'Name', 'type' => 'string', 'required' => true)
+    end
+
+    it 'serializes an explicit default (false) and non-default visibility' do
+      flag = descriptors.detect { |d| d['id'] == 'flag' }
+      expect(flag).to include('default' => false, 'visibility' => 'optional')
+    end
+
+    it 'omits the default key for a field without a default' do
+      name = descriptors.detect { |d| d['id'] == 'name' }
+      expect(name).not_to have_key('default')
+    end
+
+    it 'omits the required key for a non-required field' do
+      flag = descriptors.detect { |d| d['id'] == 'flag' }
+      expect(flag).not_to have_key('required')
+    end
+
+    it 'serializes an enumeration as id/label string pairs' do
+      status = descriptors.detect { |d| d['id'] == 'status' }
+      expect(status['enumeration']).to eq([{ 'id' => 'open', 'label' => 'open' },
+                                           { 'id' => 'closed', 'label' => 'closed' },])
+    end
+
+    it 'recurses into nested fields' do
+      team = descriptors.detect { |d| d['id'] == 'team' }
+      expect(team['fields'].map { |d| d['id'] }).to eq(['team_name'])
+    end
+  end
+
+  describe '.gql_restore_fields_from_descriptors' do
+    let(:source_schema) do
+      IPaaS::Connector::Schema.new('reference') do
+        field :name, 'Name', :string, required: true
+        field :flag, 'Flag', :boolean, default: false, visibility: 'optional'
+        field :status, 'Status', :string, enumeration: %w[open closed]
+        field :team, 'Team', :nested do
+          field :team_name, 'Team Name', :string
+        end
+      end
+    end
+
+    let(:restored) do
+      descriptors = described_class.gql_collect_field_descriptors(source_schema.fields)
+      target = IPaaS::Connector::Schema.new('restored')
+      described_class.gql_restore_fields_from_descriptors(target, descriptors)
+      target
+    end
+
+    it 'restores the same field ids and types' do
+      expect(restored.fields.map { |f| [f.id, f.type] })
+        .to eq(source_schema.fields.map { |f| [f.id, f.type] })
+    end
+
+    it 'restores an explicit default of false (not nil)' do
+      flag = restored.fields.detect { |f| f.id == :flag }
+      expect(flag.default).to be(false)
+    end
+
+    it 'restores a field without a default as nil' do
+      name = restored.fields.detect { |f| f.id == :name }
+      expect(name.default).to be_nil
+    end
+
+    it 'restores required' do
+      name = restored.fields.detect { |f| f.id == :name }
+      expect(name.required).to be(true)
+    end
+
+    it 'restores a non-required field with the same required value as the source (not fabricated true)' do
+      source_flag = source_schema.fields.detect { |f| f.id == :flag }
+      restored_flag = restored.fields.detect { |f| f.id == :flag }
+      expect(restored_flag.required).to eq(source_flag.required)
+      expect(restored_flag.required).not_to be(true)
+    end
+
+    it 'restores non-default visibility' do
+      flag = restored.fields.detect { |f| f.id == :flag }
+      expect(flag.visibility).to eq('optional')
+    end
+
+    it 'restores the default visibility when none was serialized' do
+      name = restored.fields.detect { |f| f.id == :name }
+      expect(name.visibility).to eq('visible')
+    end
+
+    it 'restores the enumeration' do
+      status = restored.fields.detect { |f| f.id == :status }
+      expect(status.enumeration).to eq([{ id: 'open', label: 'open' }, { id: 'closed', label: 'closed' }])
+    end
+
+    it 'restores nested sub-fields' do
+      team = restored.fields.detect { |f| f.id == :team }
+      expect(team.fields.map(&:id)).to eq([:team_name])
+    end
+  end
 end

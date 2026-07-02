@@ -6,6 +6,9 @@ module IPaaS
           include IPaaS::Connector::Schema::Extension
           include IPaaS::Connector::Authentication::Outbound::Extension
 
+          SCOPE_HINT = 'Optional space-separated OAuth 2 scope(s) to request, if the ' \
+                       'authorization server requires them.'.freeze
+
           schema do
             field :oauth2, 'OAuth 2', :nested,
                   hint: 'Fill out these details in case all communication uses OAuth 2.',
@@ -20,6 +23,7 @@ module IPaaS
               field :client_secret, 'Client secret', :secret_string,
                     required: true
               field :refresh_token, 'Refresh token', :string
+              field :scope, 'Scope', :string, hint: SCOPE_HINT, visibility: 'optional'
             end
 
             after_update do |fields, new_values|
@@ -48,6 +52,7 @@ module IPaaS
                    else
                      raise IPaaS::Error, "Unknown grant_type: #{grant_type}"
                    end
+            body[:scope] = oauth2_config[:scope].to_s.strip if oauth2_config[:scope].present?
             request.headers['Authorization'] = oauth2_authorization_header(oauth2_config[:authorization_url], body)
           end
         end

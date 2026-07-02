@@ -8,12 +8,14 @@ describe 'GraphQL Introspection Failure Cache', :action do
   let(:outbound_connection_config) { graphql_connector_outbound_connection_config }
   let(:graphql_endpoint) { graphql_connector_endpoint }
   let(:action_input) { { object: 'users' } }
+  let(:bundle_ttl) { IPaaS::Job::GraphQL::ArtifactCache::BUNDLE_TTL }
 
-  # Captures the exact key the connector writes to the negative cache during a
-  # run, so key assertions exercise production code instead of a spec-side mirror.
+  # Captures the exact key the connector writes to the negative cache during a run, so key
+  # assertions exercise production code instead of a spec-side mirror. The negative cache is
+  # connection-scoped, so the spy sits on the outbound connection where the connector writes.
   def capture_written_failure_key
     captured = nil
-    allow(@action).to receive(:cache_write).and_wrap_original do |orig, key, *args|
+    allow(@action.outbound_connection).to receive(:cache_write).and_wrap_original do |orig, key, *args|
       captured ||= key if key.to_s.include?('introspection_failure_')
       orig.call(key, *args)
     end
@@ -43,14 +45,18 @@ describe 'GraphQL Introspection Failure Cache', :action do
 
   before(:each) do
     # Build with a successful introspection (and a permissive OAuth token endpoint
-    # for the client-credential examples) so the action resolves cleanly, then
-    # clear the positive cache so each example controls the introspection outcome.
+    # for the client-credential examples) so the action resolves cleanly, then clear
+    # the schema cache and advance the bundle generation past the bundles just built,
+    # so each example controls the introspection outcome: the warm bundle is never read
+    # (a refresh-driven bump stays ahead of it too), so run takes the cold introspection
+    # path these examples exercise.
     stub_request(:post, /oauth\./).to_return(status: 200, body: { access_token: 'tok', token_type: 'bearer' }.to_json,
                                              headers: { 'content-type' => 'application/json' })
     stub_graphql_connector_introspection
     @action = action(action_input)
-    @action.cache_clear('gql_schema')
-    @action.cache_clear('_schema_present')
+    @action.outbound_connection.cache_clear('gql_schema')
+    current_gen = @action.outbound_connection.cache_read('gql_bundle_gen').to_i
+    @action.outbound_connection.cache_write('gql_bundle_gen', current_gen + 1, bundle_ttl)
     WebMock.reset!
   end
 
@@ -248,6 +254,28 @@ describe 'GraphQL Introspection Failure Cache', :action do
 
       expect { @action.run }.not_to raise_error
       expect(introspection_request_count).to eq(1)
+    end
+  end
+
+  describe 'stale _schema_present marker from a prior connector version' do
+    it 'never consults a leftover marker and re-introspects instead of serving a nil schema' do
+      # Simulate a pre-upgrade leftover: the gql_schema payload is gone but the marker remains.
+      # The cold path must ignore the marker and re-introspect, not return a nil schema.
+      stub_graphql_connector_introspection
+      stub_graphql_connector_query(/users/, {
+        'users' => { 'nodes' => [], 'pageInfo' => { 'hasNextPage' => false, 'endCursor' => nil }, 'totalCount' => 0 },
+      })
+      @action.outbound_connection.cache_write('_schema_present', true, 3600)
+
+      read_keys = []
+      allow(@action.outbound_connection).to receive(:cache_read).and_wrap_original do |orig, key|
+        read_keys << key
+        orig.call(key)
+      end
+
+      expect { @action.run }.not_to raise_error
+      expect(read_keys).not_to include('_schema_present') # the marker is never consulted
+      expect(introspection_request_count).to eq(1) # cold path re-introspected
     end
   end
 

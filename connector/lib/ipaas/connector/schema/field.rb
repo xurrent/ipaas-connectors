@@ -6,7 +6,7 @@ module IPaaS
 
         proc_safe :type, :'type=', :array, :'array=', :disabled, :'disabled=',
                   :label, :'label=', :hint, :'hint=', :required, :'required=',
-                  :visibility, :'visibility=', :enumeration, :'enumeration=', :fields,
+                  :visibility, :'visibility=', :enumeration, :'enumeration=', :fields, :default,
                   :min_date, :'min_date=', :max_date, :'max_date='
 
         ANY_TYPE_PATTERN = /\Aany_[a-z_]+_type\z/
