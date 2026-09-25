@@ -90,6 +90,7 @@ module IPaaS
 
               if id.is_a?(IPaaS::Connector::Schema::Field)
                 self._fields << IPaaS::Connector::Types::SchemaFieldType.resolve(id.to_h_ref).tap do |field|
+                  owned_by(field, own_connector)
                   field.instance_eval(&block) if block
                 end
                 return
@@ -113,6 +114,7 @@ module IPaaS
               end
 
               self._fields << IPaaS::Connector::Schema::Field.new.tap do |field|
+                owned_by(field, own_connector)
                 field.attributes = field_params.except(:fields)
                 field.fields = fields if fields&.any?
                 field.instance_eval(&block) if block
@@ -215,21 +217,28 @@ module IPaaS
             block = schema_block(name, reference)
             return unless block || default_fields
 
-            schema.regenerate(self) do |s|
-              s.fields.clear
-              s.connector = resolve_connector_for_schema
-              on_invalid = ->(msg) {
-                s.errors.add(:base, msg)
-              }
-              IPaaS::Connector::Common::ProcHelper.new(s, block, on_invalid: on_invalid).execute_if_valid if block
-              if default_fields
-                IPaaS::Connector::Common::ProcHelper.new(s, default_fields, on_invalid: on_invalid).execute_if_valid
-              end
+            schema.regenerate(self) { |s| run_schema_blocks(name, s, block, default_fields) }
+          end
+
+          def run_schema_blocks(name, schema, block, default_fields)
+            owner = schema_owner(name)
+            schema.fields.clear
+            owned_by(schema, owner)
+            on_invalid = ->(msg) { schema.errors.add(:base, msg) }
+            [block, default_fields].compact.each do |schema_block|
+              IPaaS::Connector::Common::ProcHelper.new(schema, schema_block, on_invalid: on_invalid, connector: owner)
+                                                  .execute_if_valid
             end
           end
 
-          def resolve_connector_for_schema
-            self.connector if respond_to?(:connector)
+          # Blocks copied from a template belong to the template's connector, which is read-only; the
+          # copy's own connector may be an attribute a block could reassign.
+          def schema_owner(name)
+            @_schema_template_source&.dig(name)&.connector || own_connector
+          end
+
+          def owned_by(object, owner)
+            object.instance_variable_set(:@connector, owner)
           end
 
           # Build schemas for this instance from the template's evaluated fields. Each new schema
@@ -278,7 +287,7 @@ module IPaaS
               if template_schema
                 schema.fields = template_schema.fields.map(&:deep_dup)
                 schema.name = template_schema.name
-                schema.connector = resolve_connector_for_schema
+                owned_by(schema, schema_owner(name))
                 au = template_schema.instance_variable_get(:@after_update)
                 schema.instance_variable_set(:@after_update, au) if au
               end
@@ -295,13 +304,7 @@ module IPaaS
 
             instance = self
             schema.instance_variable_set(:@regenerator, proc { |s|
-              s.fields.clear
-              s.connector = instance.send(:resolve_connector_for_schema)
-              on_invalid = ->(msg) { s.errors.add(:base, msg) }
-              IPaaS::Connector::Common::ProcHelper.new(s, block, on_invalid: on_invalid).execute_if_valid if block
-              if default_fields
-                IPaaS::Connector::Common::ProcHelper.new(s, default_fields, on_invalid: on_invalid).execute_if_valid
-              end
+              instance.send(:run_schema_blocks, name, s, block, default_fields)
             })
           end
 

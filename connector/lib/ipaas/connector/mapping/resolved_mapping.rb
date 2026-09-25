@@ -68,9 +68,11 @@ module IPaaS
           mapping_error(field, "Field '%<field>' is mapped twice.") if self.key?(field.id)
           return flag_unresolved(field, resolved_value) if unresolved_value?(resolved_value)
 
-          resolved_value = field.type_def.resolve(resolved_value, context: context)
-          validate_field(field, resolved_value)
-          self[field.id] = resolved_value
+          reporting_raises(field) do
+            resolved_value = field.type_def.resolve(resolved_value, context: context)
+            validate_field(field, resolved_value)
+            self[field.id] = resolved_value
+          end
         end
 
         def add_resolved_array(field, resolved_value)
@@ -86,13 +88,30 @@ module IPaaS
           return flag_unresolved(field, element_value, designator) if unresolved_value?(element_value)
 
           flag_malformed_schema_field(field, element_value, index)
-          field.type_def.resolve(element_value, context: context).tap do |resolved_element_value|
-            validate_field(field, resolved_element_value, field_designator: designator)
+          reporting_raises(field, designator) do
+            field.type_def.resolve(element_value, context: context).tap do |resolved_element_value|
+              validate_field(field, resolved_element_value, field_designator: designator)
+            end
           end
         end
 
         def unresolved_value?(value)
           IPaaS::Connector::Common::UnresolvedNode.within?(value)
+        end
+
+        # A value the connector cannot handle costs its own field; outside the validating pass
+        # there is nowhere to record that, so the raise has to keep travelling.
+        def reporting_raises(field, field_designator = nil)
+          yield
+        rescue StandardError, SystemStackError => e
+          raise unless @validating_mapping
+
+          mapping_error(field, "Field '%<field>' raised #{e.class}: #{decodable(e.message)}", field_designator)
+          nil
+        end
+
+        def decodable(text)
+          text.to_s.dup.force_encoding(Encoding::UTF_8).scrub
         end
 
         def flag_unresolved(field, value, field_designator = nil)
@@ -132,7 +151,7 @@ module IPaaS
         def add_base_error
           return unless @base_error
 
-          errors.add(:base, @base_error.message)
+          errors.add(:base, decodable(@base_error.message))
           local_trace = @base_error.backtrace.filter_map { |trace| trace[%r{(/connectors?/.*)$}, 1] }
           errors.add(:base, local_trace.join("\n"))
         end
@@ -183,15 +202,20 @@ module IPaaS
         def resolve_proc(field, proc, params = nil, attribute: nil)
           ResolvedMapping.tracking_resolution(context) do
             log_attribute = "#{attribute} " if attribute.present?
-            on_invalid = ->(msg) { mapping_error(field, "Field '%<field>' #{log_attribute}code invalid: #{msg}") }
-            proc_helper = IPaaS::Connector::Common::ProcHelper.new(context, proc, on_invalid: on_invalid)
+            proc_helper = proc_helper_for(field, proc, log_attribute)
             begin
               proc_helper.execute_if_valid(*params)
             # SystemStackError is not a StandardError; catch it so a self-referential proc degrades to a field error.
             rescue StandardError, SystemStackError => e
-              mapping_error(field, "Field '%<field>' #{log_attribute}code raised #{e.class}: #{e.message}")
+              mapping_error(field, "Field '%<field>' #{log_attribute}code raised #{e.class}: #{decodable(e.message)}")
             end
           end
+        end
+
+        def proc_helper_for(field, proc, log_attribute)
+          on_invalid = ->(msg) { mapping_error(field, "Field '%<field>' #{log_attribute}code invalid: #{msg}") }
+          IPaaS::Connector::Common::ProcHelper.new(context, proc, on_invalid: on_invalid,
+                                                                  connector: field.try(:connector))
         end
 
         def resolve_variable(field, variable)

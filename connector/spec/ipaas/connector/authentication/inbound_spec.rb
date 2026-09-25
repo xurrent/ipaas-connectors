@@ -11,7 +11,33 @@ describe IPaaS::Connector::Authentication::Inbound do
     end
   end
 
+  it 'ships every registered module from the gem, so its blocks are judged process-wide' do
+    gem_lib = IPaaS::Connector::Common::ProcHelper::GEM_LIB
+    helpers = subject.keys.flat_map do |key|
+      module_klass = subject.module(key)
+      [module_klass.validate_request_helper(nil), module_klass.setup_info_helper(nil)]
+    end.compact
+
+    expect(helpers).not_to be_empty
+    expect(helpers.map { |helper| helper.procedure.source_location.first }).to all(start_with(gem_lib))
+  end
+
+  it 'refuses to register a module whose blocks live outside the gem, since nothing owns them' do
+    allow(IPaaS.default_logger).to receive(:warn)
+    outsider = Module.new do
+      include IPaaS::Connector::Schema::Extension
+      include IPaaS::Connector::Authentication::Inbound::Extension
+
+      validate { |_request| true }
+    end
+
+    expect { subject.register(:outsider, outsider) }
+      .to raise_error(IPaaS::Connector::Common::ProcHelper::MissingValidationStore)
+  end
+
   context 'validation' do
+    before(:each) { treat_spec_blocks_as_gem_code }
+
     it 'should check whether validation proc is valid' do
       # :nocov:
       module BadInbound

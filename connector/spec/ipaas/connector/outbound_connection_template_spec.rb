@@ -26,6 +26,7 @@ describe IPaaS::Connector::OutboundConnectionTemplate do
 
   describe 'schemas' do
     it 'should define the config_schema' do
+      owned_by_spec_connector(outbound_connection)
       outbound_connection.config_schema do
         field :foo, 'Foo', :string
       end

@@ -16,6 +16,10 @@ describe IPaaS::Connector::Common::ProcRules::ValidMethodsRule do
     :respond_to_missing?,
     :instance_method,
     :to_proc,
+    # `Proc#>>` and `Method#>>` compose two callables into a third.
+    :>>,
+    # Refused here, a class-row grant of `new` still instantiates nothing.
+    :new,
   ].each do |unsafe_method|
     it "does not allow #{unsafe_method}" do
       expect(IPaaS::Connector::Common::ProcRules::ValidMethodsRule::RUBY_METHODS).not_to include(unsafe_method)
@@ -37,12 +41,17 @@ describe IPaaS::Connector::Common::ProcRules::ValidMethodsRule do
     :psa_secret_for,
     :psa_delete_secret_for,
     :secure_compare,
+    :kind_of?,
+    :instance_of?,
     :today,
     :date,
     :beginning_of_day,
     :since,
     :saturday?,
     :setup_info,
+    :'path=',
+    :'fields=',
+    :|,
   ].each do |allowed_method|
     it "allows #{allowed_method}" do
       expect { rule.validate_method(allowed_method) }.not_to raise_error
@@ -80,6 +89,19 @@ describe IPaaS::Connector::Common::ProcRules::ValidMethodsRule do
     end
   end
 
+  # A look-alike character reads as the operator it resembles and allow-lists nothing: `:ˆ`
+  # (U+02C6) sat among the arithmetic operators without ever matching a method name.
+  describe 'every allowed method is named in ASCII' do
+    it 'has no unreachable look-alike entry, on any of the three lists validate_method consults' do
+      allowed = described_class::RUBY_METHODS +
+                described_class::ADDITIONAL_METHODS +
+                IPaaS::Connector::Common::ProcRules::ProcSafe.registry
+      non_ascii = allowed.reject { |method_name| method_name.to_s.ascii_only? }
+
+      expect(non_ascii).to be_empty
+    end
+  end
+
   describe 'method constants' do
     method_constants = [
       :BASE_METHODS, :COMPARISON_METHODS, :STRING_METHODS, :NUMBER_METHODS,
@@ -97,7 +119,7 @@ describe IPaaS::Connector::Common::ProcRules::ValidMethodsRule do
   end
 
   describe 'reflective dispatch: a symbol argument that becomes the dispatched method name' do
-    # These cases must name no blocked constant. `Kernel` is blocked by NoGlobalAccessRule, so a
+    # These cases must name no constant off the list. `Kernel` is refused by ValidConstantsRule, so a
     # `Kernel`-bearing source is rejected even with REFLECTIVE_METHODS empty and proves nothing here.
     def errors_for(source)
       errors = []

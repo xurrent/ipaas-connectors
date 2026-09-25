@@ -371,4 +371,138 @@ describe IPaaS::Connector do
         .to eq(%(Helpers have errors: [["foo", ["Method 'invalid_method' not allowed."]]]))
     end
   end
+
+  describe 'proc_validations' do
+    it 'is one store per connector instance, kept between calls, built by the factory' do
+      store = connector.proc_validations
+
+      expect(store).to be_a(Set)
+      expect(connector.proc_validations).to be(store)
+      expect(IPaaS::Connector::Connector.new('other').proc_validations).not_to be(store)
+    end
+
+    it 'builds the store with whatever factory the host installs' do
+      installed = Set.new
+      original = IPaaS::Connector::Connector.proc_validations_factory
+      IPaaS::Connector::Connector.proc_validations_factory = -> { installed }
+      begin
+        expect(IPaaS::Connector::Connector.new('hosted').proc_validations).to be(installed)
+      ensure
+        IPaaS::Connector::Connector.proc_validations_factory = original
+      end
+      expect(connector.proc_validations).not_to be(installed)
+    end
+
+    it 'receives the verdict of a helper defined at connector level inside the definition block' do
+      defined = IPaaS::Connector::Connector.new('with-helper') do
+        name 'With helper'
+        helper(:greet) { 'hi' }
+      end
+      IPaaS::Connector::Common::ProcHelper.validated_before.clear
+
+      expect(defined.helpers_definition.connector).to be(defined)
+      expect(defined).to be_valid
+      expect(defined.proc_validations.size).to eq(1)
+      expect(IPaaS::Connector::Common::ProcHelper.validated_before).to be_empty
+    end
+  end
+
+  describe 'connector on the objects it builds' do
+    it 'is read-only on every template and schema, so nothing can move their verdicts' do
+      skip_function_capture_validation
+      built = IPaaS::Connector::Connector.new('owner') do
+        name 'Owner'
+        inbound_connection { api_key_validator }
+        outbound_connection { api_key_authenticator }
+        trigger('t') do
+          name 'Trigger one'
+          parse { {} }
+        end
+        action('a') do
+          name 'Action one'
+          run { 1 }
+        end
+      end
+      owners = [built.inbound_connection, built.outbound_connection, built.trigger('t'), built.action('a'),
+                built.trigger('t').config_schema,]
+
+      aggregate_failures do
+        owners.each do |owner|
+          expect(owner.connector).to be(built)
+          expect(owner).not_to respond_to(:connector=)
+          expect { owner.connector(built) }.to raise_error(ArgumentError)
+        end
+      end
+    end
+  end
+
+  describe 'seal_helpers!' do
+    let(:built) do
+      skip_function_capture_validation
+      IPaaS::Connector::Connector.new('sealed-owner') do
+        name 'Owner'
+        inbound_connection { api_key_validator }
+        outbound_connection { api_key_authenticator }
+        trigger('t') do
+          name 'Trigger one'
+          parse { {} }
+        end
+        action('a') do
+          name 'Action one'
+          run { 1 }
+        end
+      end
+    end
+
+    let(:registries) do
+      [built, built.inbound_connection, built.outbound_connection, built.trigger('t'), built.action('a')]
+        .map(&:helpers_definition)
+    end
+
+    it 'seals every registry in the graph, and the hash inside each one' do
+      built.seal_helpers!
+
+      aggregate_failures do
+        registries.each do |registry|
+          expect(registry).to be_frozen
+          expect(registry.proc_helpers_by_name).to be_frozen
+        end
+      end
+    end
+
+    # Contrast case for the above: without the call the same registries are writable, so the spec
+    # proves the seal rather than a property they had anyway.
+    it 'leaves every registry writable until it is called' do
+      aggregate_failures do
+        registries.each do |registry|
+          expect(registry).not_to be_frozen
+          expect(registry.proc_helpers_by_name).not_to be_frozen
+        end
+      end
+    end
+
+    # The one registry the seal creates rather than finds, so freezing the ivar in place would
+    # leave it writable.
+    it 'seals the registry of a connector that declared nothing' do
+      bare = IPaaS::Connector::Connector.new('bare-owner') { name 'Bare' }
+
+      bare.seal_helpers!
+
+      expect(bare.helpers_definition).to be_frozen
+      expect { bare.helper(:planted) { 'planted' } }.to raise_error(FrozenError, /sealed/)
+    end
+
+    it 'refuses a helper planted on any template in the sealed graph' do
+      built.seal_helpers!
+
+      owners = [built, built.inbound_connection, built.outbound_connection, built.trigger('t'),
+                built.action('a'),]
+
+      aggregate_failures do
+        owners.each do |owner|
+          expect { owner.helper(:planted) { 'planted' } }.to raise_error(FrozenError, /sealed/)
+        end
+      end
+    end
+  end
 end

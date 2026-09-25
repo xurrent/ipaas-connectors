@@ -549,17 +549,20 @@ describe 'HTTP Send HTTP Request Action', :action do
           run_action({ method: 'GET', query_parameters: [
             { name: 'filter', value: 'sig&api_key=EVIL', already_encoded: true },
           ], })
-        end.to raise_error(IPaaS::Error, /must not contain '&', ';', a tab/)
+        end.to raise_error(IPaaS::Error, /must not contain '&', a tab/)
       end
 
-      it 'should refuse an unencoded value that would inject a parameter with a semicolon' do
-        # `;` survives URI::Generic#query= verbatim, and CGI.parse, PHP and Jetty treat it as a
-        # separator, so it appends a parameter on any such target just as a bare & would.
-        expect do
-          run_action({ method: 'GET', query_parameters: [
-            { name: 'filter', value: 'sig;api_key=EVIL', already_encoded: true },
-          ], })
-        end.to raise_error(IPaaS::Error, /must not contain '&', ';', a tab/)
+      it 'should send a bare semicolon inside an already-encoded value as part of that one value' do
+        # A CloudFront signed URL carries response-content-type=text/plain;charset=utf-8 as one value.
+        # WebMock normalises `;` and `=` alike on both sides, so only the captured query proves the bytes.
+        queries = captured_queries
+        stub = stub_request(:get, "#{example_server}?filter=sig%3Bapi_key=EVIL").to_return(body: 'Hello World!')
+        output = run_action({ method: 'GET', query_parameters: [
+          { name: 'filter', value: 'sig;api_key=EVIL', already_encoded: true },
+        ], })
+        expect(queries.last).to eq('filter=sig;api_key=EVIL')
+        expect(output.dig(:response, :body)).to eq('Hello World!')
+        expect(stub).to have_been_requested.once
       end
 
       context 'configured the way the designer stores it' do

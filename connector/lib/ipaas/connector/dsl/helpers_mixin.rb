@@ -11,7 +11,7 @@ module IPaaS
 
         included do
           attr_accessor :helpers_definition do
-            IPaaS::Connector::Common::Helpers.new
+            IPaaS::Connector::Common::Helpers.new(connector: (self if is_a?(IPaaS::Connector::Connector)))
           end
           validate :helpers_valid?
 

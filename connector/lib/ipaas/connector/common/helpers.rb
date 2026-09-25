@@ -10,13 +10,30 @@ module IPaaS
           end
         end
 
-        attr_accessor :proc_helpers_by_name, :errors
-        attr_reader :parent_helpers
+        attr_accessor :proc_helpers_by_name
+        attr_reader :parent_helpers, :errors
 
-        def initialize(context = nil, parent_helpers: nil)
+        def initialize(context = nil, parent_helpers: nil, connector: nil)
           @context = context
+          @connector = connector
+          @errors = []
           self.parent_helpers = parent_helpers
           self.proc_helpers_by_name = {}.with_indifferent_access
+        end
+
+        def freeze
+          for_proc
+          proc_helpers_by_name.freeze
+          super
+        end
+
+        def connector
+          @connector || parent_helpers&.connector
+        end
+
+        # The default inspect would print the whole connector graph through @connector.
+        def inspect
+          "Helpers #{proc_helpers_by_name.keys}"
         end
 
         # `registered_helper` walks the chain, which a proxy cannot answer, so the chain must hold
@@ -31,7 +48,7 @@ module IPaaS
 
         def copy_for(new_context)
           new_parent_helpers = parent_helpers&.copy_for(new_context)
-          Helpers.new(new_context, parent_helpers: new_parent_helpers).tap do |new_helpers|
+          Helpers.new(new_context, parent_helpers: new_parent_helpers, connector: @connector).tap do |new_helpers|
             proc_helpers_by_name.each do |name, proc_helper|
               new_helpers.define_helper(name, &proc_helper.procedure)
             end
@@ -52,21 +69,24 @@ module IPaaS
         end
 
         def valid?
-          self.errors = []
+          errors.clear
           proc_helpers_by_name.map do |name, proc_helper|
             proc_helper.valid?.tap do |valid|
-              self.errors << [name, proc_helper.errors] unless valid
+              errors << [name, proc_helper.errors] unless valid
             end
           end.detect(&:!).nil?
         end
 
-        # A proxy answers these itself, so a helper of the same name would never be dispatched.
         def define_helper(name, &block)
-          if HelpersProxy::OWN_METHODS.include?(name.to_sym)
+          if proc_helpers_by_name.frozen?
+            raise FrozenError, "Helper '#{name}' cannot be defined; this connector's helpers are sealed."
+          end
+          # A proxy answers these itself, so a helper of the same name would never be dispatched.
+          if HelpersProxy::RESERVED_NAMES.include?(name.to_sym)
             raise ArgumentError, "Helper '#{name}' is reserved; choose another name."
           end
 
-          proc_helpers_by_name[name] = IPaaS::Connector::Common::ProcHelper.new(@context, block)
+          proc_helpers_by_name[name] = IPaaS::Connector::Common::ProcHelper.new(@context, block, connector: connector)
         end
 
         # Resolves through the registry rather than sending to the parent, so resolution never

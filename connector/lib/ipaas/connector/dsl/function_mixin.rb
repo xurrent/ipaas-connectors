@@ -48,7 +48,8 @@ module IPaaS
               proc = send(attribute)
               return unless proc
 
-              IPaaS::Connector::Common::ProcHelper.new(context, proc).execute(*params, **kwargs)
+              helper = IPaaS::Connector::Common::ProcHelper.new(context, proc, connector: own_connector)
+              helper.execute(*params, **kwargs)
             end
           end
 
@@ -56,7 +57,7 @@ module IPaaS
             proc = instance_variable_get(ivar)
             return unless proc
 
-            helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc)
+            helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc, connector: own_connector)
             return if helper.valid?
 
             self.errors.add(name, "invalid: #{helper.errors.join(' ')}")

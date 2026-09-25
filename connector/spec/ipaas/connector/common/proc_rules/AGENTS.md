@@ -13,7 +13,8 @@ is closed now. It finds nothing new, so it should not be taken as automated evid
 constructs are prevented.
 
 Every rejected entry asserts the **exact** messages, and every rejected entry is paired with a
-near-identical accepted twin. A boolean-only assertion is not acceptable: several of these sources
+near-identical accepted twin — one that names only listed paths in consumed or called positions,
+since a bare class reference is itself refused. A boolean-only assertion is not acceptable: several of these sources
 were already rejected for an unrelated reason (`Marshal.load("x")` on the method name, for one), so
 `valid? == false` passes without the rule under test doing anything.
 
@@ -30,10 +31,28 @@ Two traps that make a spec source fail for a reason you did not intend:
   `@connector.helper(:x) { 'hi' }` is rejected as `Access to '@connector' not allowed.` even though
   nothing inside the block touches an instance variable. Hoist the receiver into a local first. This
   is pre-existing behaviour and applies to constants and globals on the enclosing line too.
+- **`proc { … }` is a method call in the enclosing expression.** `ProcHelper.proc_source` hands the rules
+  `proc { X }`, and `proc` is on no method list, so the source is refused as `Method 'proc' not allowed.`
+  before anything inside the block is judged. Write block fixtures as `-> { X }`.
 - **A bare identifier is not a local.** A variable captured from the enclosing scope parses as a
   receiverless `send`, so `File.read(p)` fails with `Method 'p' not allowed.` and
   `h.reduce({}) { }` with `Method 'h' not allowed.` Use literals, `params[:x]` or `config`. A local
   assigned *inside* the proc body is fine.
+
+## no_shared_variable_access_rule_spec.rb
+
+Instance, class and global variables only. Its "what stays permitted" list names constants on
+purpose: this rule must stay silent on them, or the constants rule's verdict would be duplicated or
+contradicted here.
+
+## valid_constants_rule_spec.rb
+
+Tier is an explicit axis: the same source is judged as a String proc and as a block proc, because a
+block proc may read the constants its own file assigns and a String proc may not.
+
+Every refusal asserts the exact message and sits beside an accepted twin. Any list planted for a
+spec goes in through `stub_const` and an `IPaaS.make_shareable` hash, never a plain `{}`: the rule's
+data is deeply frozen, and a stub that is not would pass a shareability check for the wrong reason.
 
 ## parser_target_drift_spec.rb
 

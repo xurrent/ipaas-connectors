@@ -2,7 +2,7 @@ require 'spec_helper'
 
 describe IPaaS::Connector::Schema do
   let(:schema) do
-    IPaaS::Connector::Schema.new('reference')
+    schema_with_connector('reference')
   end
 
   describe 'attributes' do
@@ -195,6 +195,54 @@ describe IPaaS::Connector::Schema do
       expect(@values.last).to eq({ 'foo' => 'Nope' })
     end
 
+    it 'should report an after_update failure raised on a later pass' do
+      after_update = ->(fields, values) {
+        raise 'bar was revealed' if values.key?(:bar) # only once a later pass has revealed bar
+
+        fields.detect { |f| f.id == :bar }.disabled(false)
+        fields
+      }
+      schema.field :foo, 'Foo', :string
+      schema.field :bar, 'Bar', :string, disabled: true
+      schema.after_update(&after_update)
+
+      resolved = schema.resolve(Object.new, [
+        { field_id: 'foo', fixed: 'Hello World!' },
+        { field_id: 'bar', fixed: 'Hello Moon!' },
+      ])
+      expect(resolved).not_to be_valid
+      expect(resolved.errors[:base]).to include('bar was revealed')
+    end
+
+    it 'should report an after_update that never settles within the pass bound' do
+      after_update = ->(fields, _values) {
+        fields.detect(&:disabled)&.disabled(false)
+        fields
+      }
+      ladder = (0..(IPaaS::Connector::Schema::MAX_AFTER_UPDATE_PASSES + 2)).to_a
+      ladder.each { |i| schema.field :"foo#{i}", "Foo #{i}", :string, disabled: i.positive? }
+      schema.after_update(&after_update)
+
+      resolved = schema.resolve(Object.new, ladder.map { |i| { field_id: "foo#{i}", fixed: "v#{i}" } })
+      expect(resolved).not_to be_valid
+      expect(resolved.base_error).to be_a(IPaaS::Connector::Schema::UnsettledAfterUpdate)
+      expect(resolved.errors[:base].join).to match(/never settled/)
+    end
+
+    it 'should not report a shallow after_update that settles within the pass bound' do
+      after_update = ->(fields, _values) {
+        fields.detect(&:disabled)&.disabled(false)
+        fields
+      }
+      ladder = (0..2).to_a
+      ladder.each { |i| schema.field :"foo#{i}", "Foo #{i}", :string, disabled: i.positive? }
+      schema.after_update(&after_update)
+
+      resolved = schema.resolve(Object.new, ladder.map { |i| { field_id: "foo#{i}", fixed: "v#{i}" } })
+      expect(resolved).to be_valid
+      expect(resolved.keys.size).to eq(ladder.size)
+    end
+
     it 'should return an invalid mapping when after_update code fails during execution' do
       after_update = ->(_fields, _values) {
         'foo'.after_update # error
@@ -263,14 +311,13 @@ describe IPaaS::Connector::Schema do
     it 'should duplicate the attributes' do
       schema.name 'Bar'
       schema.field :foo, 'Foo', :string
-      schema.connector = 'Connector'
       duped = schema.deep_dup
 
       expect(duped.object_id).not_to eq(schema.object_id)
       expect(duped.reference).to eq(schema.reference)
       expect(duped.name).to eq(schema.name)
       expect(duped.fields.first.id).to eq(:foo)
-      expect(duped.connector).to eq('Connector')
+      expect(duped.connector).to be(spec_connector)
     end
   end
 

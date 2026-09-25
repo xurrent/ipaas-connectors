@@ -776,8 +776,10 @@ describe IPaaS::Connector::Runbook do
 
     it 'does not resolve output schema reference implicitly when there are multiple output schemas' do
       action = IPaaS::Connector::Action.new('multi-output-action')
-      action.output_schema('first') { field :value, 'Value', :string }
-      action.output_schema('second') { field :value, 'Value', :string }
+      action.action_template = spec_connector.action('multi-output-template') do
+        output_schema('first') { field :value, 'Value', :string }
+        output_schema('second') { field :value, 'Value', :string }
+      end
       action.runbook = runbook
       runbook.actions << action
 
@@ -1346,6 +1348,29 @@ describe IPaaS::Connector::Runbook do
         expect(runbook).not_to receive(:reconstruct_secret_strings)
         expect(runbook.action_output(action.reference)).to eq({ name: plain_string })
       end
+    end
+  end
+
+  context 'a proc that resolves to a value the connector cannot handle' do
+    # Before ResolvedMapping degraded these raises this came out of Runbook.parse and the whole
+    # runbook was quarantined, leaving the author no way to open it and correct the field.
+    let(:poisoned_hash) do
+      @root_key = 'beetroot'
+      poisoned_action = runbook_hash[:actions].first.merge(
+        input_mapping: [{ field_id: :params, proc: '"\xD3\xD4"' }],
+      )
+      runbook_hash.merge(actions: [poisoned_action])
+    end
+
+    it 'loads the runbook and reports the field instead of refusing to parse' do
+      parsed = nil
+      expect { parsed = IPaaS::Connector::Runbook.parse(poisoned_hash) }.not_to raise_error
+      expect(parsed).not_to be_valid
+      expect(parsed.errors[:trigger]).to be_empty
+      expect(parsed.errors[:actions]).to include(
+        '(action_reference) invalid: Input mapping invalid: ' \
+        "Field 'params' raised ArgumentError: invalid byte sequence in UTF-8",
+      )
     end
   end
 end

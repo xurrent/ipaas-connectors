@@ -28,6 +28,9 @@ describe IPaaS::Connector::Common::ProcHelper do
     '::JSON',
     'a = 1; a += 2; a',
     'a = nil; a ||= 3; a',
+    'a = 1; a &&= 2; a',
+    'a = [1]; a |= [2]; a',
+    'params[:h][:k] ||= 1',
     'config.present? ? config : nil',
     'if params[:a] then 1 elsif params[:b] then 2 else 3 end',
     'unless params[:a] then 1 end',
@@ -70,7 +73,7 @@ describe IPaaS::Connector::Common::ProcHelper do
     :defs, :dstr, :dsym, :ensure, :erange, :false, :float, :gvar, :hash, :hash_pattern,
     :if, :in_pattern, :int, :irange, :itblock, :ivar, :ivasgn, :kwarg, :kwbegin, :kwoptarg,
     :kwrestarg, :kwsplat, :lvar, :lvasgn, :masgn, :match_as, :match_var, :mlhs, :module,
-    :next, :nil, :numblock, :op_asgn, :optarg, :or, :or_asgn, :pair, :regexp, :regopt,
+    :and_asgn, :next, :nil, :numblock, :op_asgn, :optarg, :or, :or_asgn, :pair, :regexp, :regopt,
     :resbody, :rescue, :restarg, :return, :self, :send, :splat, :str, :sym, :true, :until,
     :when, :while, :yield, :zsuper,
   ].freeze
@@ -124,6 +127,29 @@ describe IPaaS::Connector::Common::ProcHelper do
       duplicates = NODE_FORMS.tally.select { |_, count| count > 1 }.keys
 
       expect(duplicates).to be_empty
+    end
+  end
+
+  # `ValidMethodsRule` handles exactly these three node types, and reads an operator child from
+  # `op_asgn` alone. A parser upgrade that adds a fourth shorthand form would route it past the
+  # handler silently, so the set is pinned where the rest of the grammar drift is caught.
+  describe 'the shorthand assignment pin' do
+    it 'pins the set ValidMethodsRule handles' do
+      expect(RuboCop::AST::Node::SHORTHAND_ASSIGNMENTS).to eq(Set[:op_asgn, :or_asgn, :and_asgn]),
+                                                           'A shorthand assignment form was added or removed. ' \
+                                                           'Re-review ValidMethodsRule#on_op_asgn against it ' \
+                                                           'before re-pinning.'
+    end
+
+    it 'emits an operator child for op_asgn only' do
+      operators = { 'a = 1; a += 1' => :op_asgn, 'a = nil; a ||= 1' => :or_asgn, 'a = 1; a &&= 1' => :and_asgn }
+
+      shapes = operators.keys.to_h do |source|
+        node = processed(source).ast.each_node(:op_asgn, :or_asgn, :and_asgn).first
+        [node.type, node.children[1].is_a?(Symbol)]
+      end
+
+      expect(shapes).to eq(op_asgn: true, or_asgn: false, and_asgn: false)
     end
   end
 end

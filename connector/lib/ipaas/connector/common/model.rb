@@ -29,6 +29,10 @@ module IPaaS
             unresolved_error.present?
           end
 
+          def own_connector
+            connector if respond_to?(:connector)
+          end
+
           def full_error_messages
             errors.full_messages.join(' ')
           end

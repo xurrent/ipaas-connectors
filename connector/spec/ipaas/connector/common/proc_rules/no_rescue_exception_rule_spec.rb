@@ -9,35 +9,19 @@ describe IPaaS::Connector::Common::ProcRules::NoRescueExceptionRule do
     errors
   end
 
-  def not_allowed(name)
-    "'rescue #{name}' is not allowed; rescue StandardError or a specific error class."
-  end
-
   LITERAL_REQUIRED = "'rescue' requires literal error classes, e.g. 'rescue StandardError'.".freeze
 
-  describe 'rescue classes that would capture a timeout interrupt' do
-    {
-      'begin; x.to_s; rescue Exception; retry; end' => 'Exception',
-      'begin; x.to_s; rescue Exception; :ok; end' => 'Exception',
-      'begin; x.to_s; rescue Exception => e; e.message; end' => 'Exception',
-      'begin; x.to_s; rescue ::Exception; :ok; end' => 'Exception',
-      'begin; x.to_s; rescue Foo::Exception; :ok; end' => 'Exception', # leaf name blocked regardless of scope
-      'begin; x.to_s; rescue StandardError, Exception; :ok; end' => 'Exception',
-      'begin; x.to_s; rescue Object; :ok; end' => 'Object',
-      'begin; x.to_s; rescue BasicObject; :ok; end' => 'BasicObject',
-      'begin; x.to_s; rescue Kernel; :ok; end' => 'Kernel',
-      'begin; x.to_s; rescue SystemExit; :ok; end' => 'SystemExit',
-      'begin; x.to_s; rescue ::SystemExit; :ok; end' => 'SystemExit',
-      'begin; x.to_s; rescue SignalException; :ok; end' => 'SignalException',
-      'begin; x.to_s; rescue Guard::DeadlineExceeded; :ok; end' => 'DeadlineExceeded',
-      'begin; x.to_s; rescue ConfigTesterTimeout; :ok; end' => 'ConfigTesterTimeout',
-      'begin; x.to_s; rescue RunbooksController::FieldOptionsTimeout; retry; end' => 'FieldOptionsTimeout',
-      'begin; x.to_s; rescue MaxActionTimeExceededError; retry; end' => 'MaxActionTimeExceededError',
-      'begin; x; rescue MaxTriggerProcessingTimeExceededError; :ok; end' => 'MaxTriggerProcessingTimeExceededError',
-      'begin; x.to_s; rescue RequestTimeoutException; :ok; end' => 'RequestTimeoutException',
-    }.each do |source, name|
-      it "reports #{source.inspect} as blocking 'rescue #{name}'" do
-        expect(errors_for(source)).to contain_exactly(not_allowed(name))
+  # Which literal classes may be rescued is ValidConstantsRule's question, so a literal class of any
+  # name passes here; the through-validator pairs live in known_bad_sources_spec.
+  describe 'literal rescue classes, whatever their name' do
+    [
+      'begin; x.to_s; rescue Exception; retry; end',
+      'begin; x.to_s; rescue ::Exception; :ok; end',
+      'begin; x.to_s; rescue Foo::Exception; :ok; end',
+      'begin; x.to_s; rescue StandardError, Exception; :ok; end',
+    ].each do |source|
+      it "leaves #{source.inspect} to the constants rule" do
+        expect(errors_for(source)).to be_empty
       end
     end
   end
@@ -84,7 +68,7 @@ describe IPaaS::Connector::Common::ProcRules::NoRescueExceptionRule do
   end
 
   it 'reports each violation once, deduplicating per message' do
-    source = 'begin; x.to_s; rescue Exception; begin; y.to_s; rescue Exception; :ok; end; end'
-    expect(errors_for(source)).to contain_exactly(not_allowed('Exception'))
+    source = 'k = Exception; begin; x.to_s; rescue k; begin; y.to_s; rescue k; :ok; end; end'
+    expect(errors_for(source)).to contain_exactly(LITERAL_REQUIRED)
   end
 end

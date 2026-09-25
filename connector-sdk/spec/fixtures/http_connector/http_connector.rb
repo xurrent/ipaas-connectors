@@ -90,11 +90,10 @@ class HttpConnector < IPaaS::Connector::Definition
         array there fails the request rather than being sent in a different shape.
 
       An `already_encoded` value is rejected, with a message naming the character and its position,
-      when it contains a bare `&` or `;` (either would split it into further parameters), a tab,
-      carriage return or newline (the URL layer deletes these silently), or a `%` that is not
-      followed by two hex digits. Use `%26`, `%3B`, `%09`, `%0D`, `%0A` or `%25` for one that belongs
-      to the value. A literal space or `#` is still escaped to `%20` or `%23`, since the result has
-      to be a legal URL query.
+      when it contains a bare `&` (it would split it into a further parameter), a tab, carriage
+      return or newline (the URL layer deletes these silently), or a `%` that is not followed by two
+      hex digits. Use `%26`, `%09`, `%0D`, `%0A` or `%25` for one that belongs to the value. A literal
+      space or `#` is still escaped to `%20` or `%23`, since the result has to be a legal URL query.
 
       #### Defaults
       The connector sends `User-Agent: Xurrent iPaaS` on every request. Override it by adding a `User-Agent` entry to `headers`.
@@ -226,11 +225,11 @@ class HttpConnector < IPaaS::Connector::Definition
           array there fails the request rather than being sent in a different shape.
 
         An `already_encoded` value is rejected, with a message naming the character and its
-        position, when it contains a bare `&` or `;` (either would split it into further
-        parameters), a tab, carriage return or newline (the URL layer deletes these silently), or a
-        `%` that is not followed by two hex digits. Use `%26`, `%3B`, `%09`, `%0D`, `%0A` or `%25`
-        for one that belongs to the value. A literal space or `#` is still escaped to `%20` or
-        `%23`, since the result has to be a legal URL query.
+        position, when it contains a bare `&` (it would split it into a further parameter), a tab,
+        carriage return or newline (the URL layer deletes these silently), or a `%` that is not
+        followed by two hex digits. Use `%26`, `%09`, `%0D`, `%0A` or `%25` for one that belongs to
+        the value. A literal space or `#` is still escaped to `%20` or `%23`, since the result has
+        to be a legal URL query.
 
         ### Defaults
         The connector sends `User-Agent: Xurrent iPaaS` on every request. Override it by adding a `User-Agent` entry to `headers`.

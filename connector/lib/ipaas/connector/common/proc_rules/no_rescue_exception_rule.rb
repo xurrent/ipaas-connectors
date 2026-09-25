@@ -4,25 +4,9 @@ module IPaaS
       module ProcRules
         # Exceptions must be able to propagate out of authored procs: runtimes that execute
         # them enforce wall-clock deadlines by interrupting the proc with a non-StandardError
-        # exception. A rescue clause that captures one — directly, via an ancestor every
-        # object shares (Object, Kernel, BasicObject), or via a non-literal class the
-        # validator cannot see through — lets a proc swallow the deadline and spin unbounded
-        # or return a wrong value. An `ensure` body runs after the deadline already fired,
-        # i.e. with no timer left to bound it.
+        # exception. We only allow literal classes in rescue block so we can validate whether they
+        # are allowed via ValidConstantsRule.
         class NoRescueExceptionRule < ProcRule
-          # Matched by leaf name regardless of scope; fail closed like NoGlobalAccessRule.
-          BLOCKED_CLASS_NAMES = Set[
-            # ancestors every exception shares, so rescuing one captures any interrupt
-            :Exception, :Object, :BasicObject, :Kernel,
-            # VM-level exceptions no proc has business handling
-            :SystemExit, :SignalException, :Interrupt,
-            :NoMemoryError, :SystemStackError, :SecurityError, :ScriptError,
-            # deadline classes runtimes raise to interrupt an overrunning proc
-            :DeadlineExceeded, :ConfigTesterTimeout, :FieldOptionsTimeout,
-            :MaxActionTimeExceededError, :MaxTriggerProcessingTimeExceededError,
-            :RequestTimeoutException, :RequestTimeoutError,
-          ].freeze
-
           def initialize(...)
             super
             @reported = []
@@ -42,14 +26,9 @@ module IPaaS
           private
 
           def validate_rescued_class(entry)
-            unless entry.type == :const
-              report("'rescue' requires literal error classes, e.g. 'rescue StandardError'.")
-              return
-            end
+            return if entry.type == :const
 
-            name = entry.children[1]
-            report("'rescue #{name}' is not allowed; rescue StandardError or a specific error class.") if
-              BLOCKED_CLASS_NAMES.include?(name)
+            report("'rescue' requires literal error classes, e.g. 'rescue StandardError'.")
           end
 
           def report(message)

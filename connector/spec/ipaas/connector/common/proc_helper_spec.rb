@@ -1,6 +1,11 @@
 require 'spec_helper'
 
 describe IPaaS::Connector::Common::ProcHelper do
+  def refused_path(name)
+    "Access to '#{name}' is not allowed in expressions; only an approved set of classes is available. " \
+      'Please file a request if access is needed.'
+  end
+
   context 'action reference extractor' do
     it 'extracts single quoted references' do
       refs = IPaaS::Connector::Common::ProcHelper.action_references(<<~RUBY)
@@ -278,7 +283,7 @@ describe IPaaS::Connector::Common::ProcHelper do
 
     describe 'if_valid' do
       it 'should validate the methods' do
-        helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, 'Obj.send(:foo)')
+        helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, 'params.send(:foo)')
         expect(helper.execute_if_valid).to be_nil
         expect(helper.errors).to eq(["Method 'send' not allowed."])
       end
@@ -298,7 +303,7 @@ describe IPaaS::Connector::Common::ProcHelper do
 
       it 'should report validation errors using the on_invalid callback' do
         invalid = []
-        proc = 'Object.send(:foo).each do |f| f.bar end'
+        proc = 'params.send(:foo).each do |f| f.bar end'
         helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc, on_invalid: ->(msg) { invalid << msg })
         expect(helper.execute_if_valid).to be_nil
         expect(invalid).to eq(["Method 'bar' not allowed.", "Method 'send' not allowed."])
@@ -312,7 +317,7 @@ describe IPaaS::Connector::Common::ProcHelper do
       end
 
       it 'should validate the same source multiple times in case it is invalid' do
-        helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, 'Obj.send(:foo)')
+        helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, 'params.send(:foo)')
         expect(helper).to receive(:validate_nodes).twice.and_call_original
         expect(helper.execute_if_valid).to be_nil
         expect(helper.errors).to eq(["Method 'send' not allowed."])
@@ -322,7 +327,7 @@ describe IPaaS::Connector::Common::ProcHelper do
     end
 
     it 'should validate the methods' do
-      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, 'Obj.send(:foo)')
+      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, 'params.send(:foo)')
       expect do
         helper.execute
       end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
@@ -361,7 +366,7 @@ describe IPaaS::Connector::Common::ProcHelper do
         expect do
           helper.execute
         end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                           %(["Access to 'ENV' not allowed."]))
+                           [refused_path('ENV')].to_s)
       end
 
       it 'should not allow environment variable to be read' do
@@ -369,7 +374,7 @@ describe IPaaS::Connector::Common::ProcHelper do
         expect do
           helper.execute
         end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                           %(["Access to 'ENV' not allowed."]))
+                           [refused_path('ENV')].to_s)
       end
 
       it 'should not allow environment variable to be used as parameters' do
@@ -377,7 +382,7 @@ describe IPaaS::Connector::Common::ProcHelper do
         expect do
           helper.execute
         end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                           %(["Access to 'ENV' not allowed."]))
+                           [refused_path('ENV')].to_s)
       end
 
       it 'should not allow environment variables to be listed' do
@@ -385,7 +390,7 @@ describe IPaaS::Connector::Common::ProcHelper do
         expect do
           helper.execute
         end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                           %(["Access to 'ENV' not allowed."]))
+                           [refused_path('ENV')].to_s)
       end
 
       it 'should not allow environment variables to be changed' do
@@ -393,7 +398,7 @@ describe IPaaS::Connector::Common::ProcHelper do
         expect do
           helper.execute
         end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                           %(["Calling methods on 'ENV' not allowed."]))
+                           [refused_path('ENV')].to_s)
       end
     end
 
@@ -415,7 +420,7 @@ describe IPaaS::Connector::Common::ProcHelper do
         expect do
           helper.execute
         end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                           %(["Calling methods on 'ENVx' not allowed."]))
+                           [refused_path('ENVx')].to_s)
       end
 
       it 'should not allow local variable set to ENVx' do
@@ -423,7 +428,7 @@ describe IPaaS::Connector::Common::ProcHelper do
         expect do
           helper.execute
         end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                           %(["Access to 'ENVx' not allowed."]))
+                           [refused_path('ENVx')].to_s)
       end
 
       it 'should not allow access to ENVx' do
@@ -431,20 +436,19 @@ describe IPaaS::Connector::Common::ProcHelper do
         expect do
           helper.execute
         end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                           %(["Access to 'ENVx' not allowed."]))
+                           [refused_path('ENVx')].to_s)
       end
     end
 
     describe 'access to classes with uppercase names' do
-      # A namespaced constant named after a Ruby global is blocked too: a scope such as `URI::` can
-      # resolve `URI::DATA` to the top-level global, and static analysis cannot tell that apart from
-      # a genuine `A::DATA`, so the rule blocks by name (only ALLOWED_CONST_PATHS are exempt).
+      # A path is matched whole, so `A::DATA` is judged as its own path and not as the global `DATA`
+      # a scope such as `URI::` could resolve to; neither is on the list.
       it 'should not allow access when nested in a module' do
         helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, 'A::DATA.values.keys')
         expect do
           helper.execute
         end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                           %(["Calling methods on 'DATA' not allowed."]))
+                           [refused_path('A::DATA')].to_s)
       end
 
       it 'should not allow access at top level' do
@@ -452,7 +456,7 @@ describe IPaaS::Connector::Common::ProcHelper do
         expect do
           helper.execute
         end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                           %(["Calling methods on 'DATA' not allowed."]))
+                           [refused_path('DATA')].to_s)
       end
     end
 
@@ -474,7 +478,7 @@ describe IPaaS::Connector::Common::ProcHelper do
             expect do
               helper.execute
             end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                               %(["Calling methods on '#{const}' not allowed."]))
+                               [refused_path(const)].to_s)
           end
         end
       end
@@ -484,7 +488,7 @@ describe IPaaS::Connector::Common::ProcHelper do
         expect do
           helper.execute
         end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                           %(["Calling methods on 'ARGV' not allowed."]))
+                           [refused_path('ARGV')].to_s)
       end
 
       it 'should not allow access to TOPLEVEL_BINDING' do
@@ -492,7 +496,7 @@ describe IPaaS::Connector::Common::ProcHelper do
         expect do
           helper.execute
         end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                           %(["Calling methods on 'TOPLEVEL_BINDING' not allowed."]))
+                           [refused_path('TOPLEVEL_BINDING')].to_s)
       end
 
       describe 'global strings' do
@@ -506,7 +510,7 @@ describe IPaaS::Connector::Common::ProcHelper do
             expect do
               helper.execute
             end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                               %(["Access to '#{const}' not allowed."]))
+                               [refused_path(const)].to_s)
           end
 
           it "should not allow calling methods on #{const}" do
@@ -514,7 +518,7 @@ describe IPaaS::Connector::Common::ProcHelper do
             expect do
               helper.execute
             end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                               %(["Calling methods on '#{const}' not allowed."]))
+                               [refused_path(const)].to_s)
           end
 
           it "should not allow string #{const} as argument" do
@@ -522,7 +526,7 @@ describe IPaaS::Connector::Common::ProcHelper do
             expect do
               helper.execute
             end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                               %(["Access to '#{const}' not allowed."]))
+                               [refused_path(const)].to_s)
           end
 
           it "should not allow #{const} to be assigned to local variable" do
@@ -530,7 +534,7 @@ describe IPaaS::Connector::Common::ProcHelper do
             expect do
               helper.execute
             end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
-                               %(["Access to '#{const}' not allowed."]))
+                               [refused_path(const)].to_s)
           end
         end
       end
@@ -632,7 +636,7 @@ describe IPaaS::Connector::Common::ProcHelper do
 
     it 'should report validation errors using the on_invalid callback' do
       invalid = []
-      proc = 'Object.send(:foo).each do |f| f.bar end'
+      proc = 'params.send(:foo).each do |f| f.bar end'
       helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc, on_invalid: ->(msg) { invalid << msg })
       expect do
         helper.execute
@@ -649,7 +653,7 @@ describe IPaaS::Connector::Common::ProcHelper do
     end
 
     it 'should validate the same source multiple times in case it is invalid' do
-      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, 'Obj.send(:foo)')
+      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, 'params.send(:foo)')
       expect(helper).to receive(:validate_nodes).twice.and_call_original
       expect do
         helper.execute
@@ -732,42 +736,43 @@ describe IPaaS::Connector::Common::ProcHelper do
   context 'connector proc' do
     it 'should execute basic proc' do
       proc = -> { 'Hello World!' }
-      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc)
+      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc, connector: spec_connector)
       expect(helper.execute).to eq('Hello World!')
     end
 
     it 'should execute proc with params' do
       proc = ->(n) { n * 2 }
-      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc)
+      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc, connector: spec_connector)
       expect(helper.execute(4)).to eq(8)
     end
 
     it 'should retrieve the Ruby source code for a proc' do
       proc = -> { 'Hello World!' }
-      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc)
+      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc, connector: spec_connector)
       expect(helper.source).to eq("proc = -> { 'Hello World!' }")
     end
 
     describe 'if_valid' do
       it 'should validate the methods' do
-        proc = -> { Obj.send(:foo) }
-        helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc)
+        proc = -> { params.send(:foo) }
+        helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc, connector: spec_connector)
         expect(helper.execute_if_valid).to be_nil
         expect(helper.errors).to eq(["Method 'send' not allowed."])
       end
 
       it 'should report validation errors using the on_invalid callback' do
         invalid = []
-        proc = -> { Object.send(:foo).each(&:bar) }
-        helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc, on_invalid: ->(msg) { invalid << msg })
+        proc = -> { params.send(:foo).each(&:bar) }
+        helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc, on_invalid: ->(msg) { invalid << msg },
+                                                                            connector: spec_connector)
         expect(helper.execute_if_valid).to be_nil
         expect(invalid).to eq(["Method 'bar' not allowed.", "Method 'send' not allowed."])
       end
     end
 
     it 'should validate the methods' do
-      proc = -> { Obj.send(:foo) }
-      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc)
+      proc = -> { params.send(:foo) }
+      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc, connector: spec_connector)
       expect do
         helper.execute
       end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
@@ -776,8 +781,9 @@ describe IPaaS::Connector::Common::ProcHelper do
 
     it 'should report validation errors using the on_invalid callback' do
       invalid = []
-      proc = -> { Object.send(:foo).each(&:bar) }
-      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc, on_invalid: ->(msg) { invalid << msg })
+      proc = -> { params.send(:foo).each(&:bar) }
+      helper = IPaaS::Connector::Common::ProcHelper.new(Object.new, proc, on_invalid: ->(msg) { invalid << msg },
+                                                                          connector: spec_connector)
       expect do
         helper.execute
       end.to raise_error(IPaaS::Connector::Common::ProcHelper::InvalidProcCalled,
@@ -1055,6 +1061,226 @@ describe IPaaS::Connector::Common::ProcHelper do
       helper = described_class.new(Object.new, '1 + 1 # add the numbers')
       expect(helper.valid?).to be(true)
       expect(helper.errors.join("\n")).not_to include('outside a string')
+    end
+  end
+
+  context 'node validation' do
+    before(:each) { described_class.validated_before.clear }
+
+    it 'hands the procedure to the node validator, so a rule may read the scope of a block' do
+      procedure = -> { 1 }
+      helper = described_class.new(Object.new, procedure, connector: spec_connector)
+      expect(IPaaS::Connector::Common::ProcRules::NodeValidator).to receive(:new)
+        .with(hash_including(procedure: procedure)).and_call_original
+
+      expect(helper.valid?).to be(true)
+    end
+
+    it 'hands a String proc over as the procedure too' do
+      helper = described_class.new(Object.new, "'x'")
+      expect(IPaaS::Connector::Common::ProcRules::NodeValidator).to receive(:new)
+        .with(hash_including(procedure: "'x'")).and_call_original
+
+      expect(helper.valid?).to be(true)
+    end
+  end
+
+  describe 'validation store per definition site' do
+    let(:connector) { spec_connector }
+    let(:other_connector) { IPaaS::Connector::Connector.new('other-connector') }
+
+    before(:each) { described_class.validated_before.clear }
+
+    def gem_block
+      IPaaS::Connector::TriggerTemplate._config_schema_default_fields
+    end
+
+    def string_born_block
+      described_class.new(Object.new, '-> { 1 }').execute
+    end
+
+    def key_of(helper)
+      helper.send(:validation_cache_key)
+    end
+
+    describe 'GEM_LIB' do
+      it 'names the gem lib directory, so a gem block is gem code and a spec block is not' do
+        expect(described_class::GEM_LIB).to end_with('/connector/lib/')
+        expect(gem_block.source_location.first).to start_with(described_class::GEM_LIB)
+        expect(__FILE__).not_to start_with(described_class::GEM_LIB)
+      end
+    end
+
+    describe 'a block from a connector file' do
+      it 'records its verdict in the connector store and not in the process-wide cache' do
+        block = -> { 1 }
+        helper = described_class.new(Object.new, block, connector: connector)
+
+        expect(helper.valid?).to be(true)
+        expect(connector.proc_validations.include?(key_of(helper))).to be(true)
+        expect(described_class.validated_before).to be_empty
+      end
+
+      it 'does not serve one connector a verdict recorded for another' do
+        block = -> { 1 }
+        described_class.new(Object.new, block, connector: connector).valid?
+
+        second = described_class.new(Object.new, block, connector: other_connector)
+        expect(second).to receive(:validate_nodes).and_call_original
+        expect(second.valid?).to be(true)
+        expect(other_connector.proc_validations.size).to eq(1)
+      end
+
+      it 'serves the same connector its own verdict without parsing again' do
+        block = -> { 1 }
+        described_class.new(Object.new, block, connector: connector).valid?
+
+        second = described_class.new(Object.new, block, connector: connector)
+        expect(second).not_to receive(:validate_nodes)
+        expect(second.valid?).to be(true)
+      end
+
+      it 'raises and logs before judging anything when no connector is given' do
+        block = -> { 1 }
+        block_line = __LINE__ - 1
+        helper = described_class.new(Object.new, block)
+        expect(helper).not_to receive(:validate_nodes)
+        expect(IPaaS.default_logger).to receive(:warn)
+          .with("#{described_class::UNEXPECTED_PREFIX}: no connector owns the block from #{__FILE__}:#{block_line}")
+
+        expect { helper.valid? }.to raise_error(described_class::MissingValidationStore,
+                                                'No connector owns this block, so its validation cannot be recorded.')
+        expect(described_class.validated_before).to be_empty
+      end
+
+      it 'raises when the connector given is not a Connector, whatever it answers' do
+        block = -> { 1 }
+        impostor = double(proc_validations: Set.new)
+        helper = described_class.new(Object.new, block, connector: impostor)
+        allow(IPaaS.default_logger).to receive(:warn)
+
+        expect { helper.valid? }.to raise_error(described_class::MissingValidationStore)
+      end
+    end
+
+    describe 'a String proc' do
+      it 'records its verdict in the process-wide cache even when a connector is given' do
+        described_class.new(Object.new, '1 + 1', connector: connector).valid?
+
+        expect(described_class.validated_before.size).to eq(1)
+        expect(connector.proc_validations.size).to eq(0)
+      end
+    end
+
+    describe 'a block from a gem file' do
+      it 'records its verdict in the process-wide cache even when a connector is given' do
+        described_class.new(Object.new, gem_block, connector: connector).valid?
+
+        expect(described_class.validated_before.size).to eq(1)
+        expect(connector.proc_validations.size).to eq(0)
+      end
+
+      it 'needs no connector' do
+        expect(described_class.new(Object.new, gem_block).valid?).to be(true)
+      end
+    end
+
+    describe 'a block born inside a String proc' do
+      it 'is refused and logged, with a connector or without, and nothing is recorded' do
+        block = string_born_block
+        expect(block.source_location.first).to eq(described_class::STRING_PROC_FILE)
+        described_class.validated_before.clear
+        expect(IPaaS.default_logger).to receive(:warn)
+          .with(a_string_including('block born inside an expression')).twice
+
+        [connector, nil].each do |owner|
+          helper = described_class.new(Object.new, block, connector: owner)
+
+          expect(helper.valid?).to be(false)
+          expect(helper.errors).to eq([described_class::UNATTRIBUTED_BLOCK_MESSAGE])
+        end
+        expect(described_class.validated_before).to be_empty
+        expect(connector.proc_validations.size).to eq(0)
+      end
+
+      it 'answers false again for a helper that already refused it, rather than raising' do
+        block = string_born_block
+        helper = described_class.new(Object.new, block, connector: connector)
+        allow(IPaaS.default_logger).to receive(:warn)
+
+        expect(helper.valid?).to be(false)
+        expect(helper.valid?).to be(false)
+        expect(helper.errors).to eq([described_class::UNATTRIBUTED_BLOCK_MESSAGE])
+        expect { helper.execute }.to raise_error(described_class::InvalidProcCalled,
+                                                 /cannot be validated/)
+      end
+
+      it 'refuses it even when its key is already recorded in the process-wide cache' do
+        block = string_born_block
+        helper = described_class.new(Object.new, block, connector: connector)
+        described_class.validated_before.add(key_of(helper))
+        allow(IPaaS.default_logger).to receive(:warn)
+
+        expect(helper.valid?).to be(false)
+        expect(helper.errors).to eq([described_class::UNATTRIBUTED_BLOCK_MESSAGE])
+      end
+
+      it 'logs the refusal before handing the message to a sink that raises' do
+        block = string_born_block
+        helper = described_class.new(Object.new, block, on_invalid: ->(message) { raise message })
+        expect(IPaaS.default_logger).to receive(:warn)
+          .with(a_string_including('block born inside an expression'))
+
+        expect { helper.valid? }.to raise_error(RuntimeError, /cannot be validated/)
+      end
+
+      it 'refuses it without a store whatever the invalid sink returns' do
+        block = string_born_block
+        helper = described_class.new(Object.new, block, on_invalid: ->(_message) { true })
+        allow(IPaaS.default_logger).to receive(:warn).and_return(true)
+
+        expect(helper.valid?).to be(false)
+        expect(helper.errors).to eq([described_class::UNATTRIBUTED_BLOCK_MESSAGE])
+      end
+    end
+
+    describe 'inspect' do
+      it 'names the origin of the block without following the connector' do
+        block = -> { 1 }
+        block_line = __LINE__ - 1
+        helper = described_class.new(Object.new, block, connector: connector)
+
+        expect(helper.inspect).to eq("ProcHelper (#{__FILE__}:#{block_line})")
+        expect(described_class.new(Object.new, '1 + 1').inspect).to eq('ProcHelper (an expression field)')
+      end
+    end
+
+    describe 'the key' do
+      let(:gem_file) { IPaaS::Connector::OutboundConnectionTemplate.instance_method(:connector).source_location.first }
+
+      # A gem block is exempt from the class allow-list, so its verdict must not answer for an expression
+      # of the same text, which shares the process-wide store.
+      it 'keeps a gem block\'s verdict from answering for an expression with the same text' do
+        gem_block = eval('proc { 1 }', binding, gem_file, 1) # rubocop:disable Style/EvalWithLocation
+        allow(described_class).to receive(:proc_source).and_call_original
+        allow(described_class).to receive(:proc_source).with(gem_block).and_return('Psych.parse')
+
+        expect(described_class.new(Object.new, gem_block).valid?).to be(true)
+        expression = described_class.new(Object.new, 'Psych.parse')
+        expect(expression.valid?).to be(false)
+        expect(expression.errors).to contain_exactly(refused_path('Psych'))
+      end
+
+      it 'is the source digest and the field class in both stores' do
+        global = described_class.new(Object.new, '1 + 1')
+        global.valid?
+        expect(described_class.validated_before).to include("#{Digest::SHA256.hexdigest('1 + 1')}:other")
+
+        block = -> { 1 }
+        scoped = described_class.new(Object.new, block, connector: connector)
+        scoped.valid?
+        expect(connector.proc_validations.include?("#{Digest::SHA256.hexdigest(scoped.source)}:other")).to be(true)
+      end
     end
   end
 end

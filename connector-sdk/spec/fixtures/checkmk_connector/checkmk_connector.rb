@@ -778,8 +778,7 @@ class CheckmkConnector < IPaaS::Connector::Definition
         params[:site] = input[:site] if input[:site].present?
 
         if input[:hostnames].present?
-          conn = http_connection(url)
-          conn.options[:params_encoder] = Faraday::FlatParamsEncoder
+          conn = http_connection(url, array_params: :flat)
           response = conn.get do |request|
             request.params = params if params.present?
             request.params['hostnames'] = input[:hostnames]

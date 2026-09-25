@@ -48,7 +48,10 @@ describe IPaaS::Connector::Types::RubyType do
 
       errors = []
       expect(subject.valid?('output[:discard] = ENV["a"] == "a"', errors)).to eq(false)
-      expect(errors).to contain_exactly("Access to 'ENV' not allowed.")
+      expect(errors).to contain_exactly(
+        "Access to 'ENV' is not allowed in expressions; only an approved set of classes is available. " \
+        'Please file a request if access is needed.',
+      )
     end
 
     it 'should return false naming the problem when the proc exhausts the stack' do

@@ -74,6 +74,36 @@ describe IPaaS::Connector::Dsl::FunctionMixin do
       expect(test.parse.call).to eq('bar')
     end
 
+    it 'records the verdict in the store of the connector of the owner, not the process-wide cache' do
+      test = Class.new(DslTester) do
+        function :parse
+      end.new
+      fn = -> { 'bar' }
+      test.parse(&fn)
+      IPaaS::Connector::Common::ProcHelper.validated_before.clear
+      expect(test.connector.proc_validations.size).to eq(0)
+
+      expect(test).to be_valid
+      expect(test.connector.proc_validations.size).to eq(1)
+      expect(IPaaS::Connector::Common::ProcHelper.validated_before).to be_empty
+    end
+
+    it 'raises when the owner has no connector to record the verdict against' do
+      orphan = Class.new do
+        include IPaaS::Connector::Common::Model
+
+        def self.model_name = ActiveModel::Name.new(self, nil, 'Orphan')
+        function :parse
+      end.new
+      fn = -> { 'bar' }
+      orphan.parse(&fn)
+      allow(IPaaS.default_logger).to receive(:warn)
+      IPaaS::Connector::Common::ProcHelper.validated_before.clear
+
+      expect { orphan.valid? }.to raise_error(IPaaS::Connector::Common::ProcHelper::MissingValidationStore)
+      expect(IPaaS::Connector::Common::ProcHelper.validated_before).to be_empty
+    end
+
     it 'validates the function itself' do
       test = Class.new(DslTester) do
         function :parse

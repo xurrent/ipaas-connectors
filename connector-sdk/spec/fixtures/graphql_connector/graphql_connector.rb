@@ -954,7 +954,7 @@ class GraphqlConnector < IPaaS::Connector::Definition
         user_includes = input[:include_fields]
         user_includes = {} unless user_includes.is_a?(Hash)
         merged = user_includes.to_hash
-        top_level.each { |name| merged[name.to_sym] = true unless merged.key?(name.to_sym) }
+        top_level.each { |name| merged[name.to_s] = true unless merged.key?(name.to_s) }
 
         input.to_hash.merge(include_fields: merged)
       end
@@ -977,7 +977,7 @@ class GraphqlConnector < IPaaS::Connector::Definition
     end
 
     helper :refresh_dynamic_schemas do |context, selection_field, output_schema_ref|
-      if action.input&.[](:refresh_schema)
+      if action.input&.[](:refresh_schema) && context.input_schema.first_after_update_pass?
         GqlArtifactCache.gql_invalidate(helpers.schema_cache_store,
                                         'gql_schema', helpers.introspection_failure_cache_key)
       end

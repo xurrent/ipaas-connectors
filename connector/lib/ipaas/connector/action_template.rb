@@ -6,7 +6,7 @@ module IPaaS
       include IPaaS::Job::Context # for validation of (schema) functions
       include IPaaS::Connector::Dsl::HelpersMixin
 
-      attr_accessor :connector
+      attr_reader :connector
 
       attribute :name, required: true, length: { in: 4..120 }
       attribute :avatar, format: { with: IPaaS::Connector::Types::AVATAR_REGEXP }

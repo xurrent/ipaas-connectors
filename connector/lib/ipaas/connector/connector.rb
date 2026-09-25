@@ -26,6 +26,10 @@ module IPaaS
       include IPaaS::Connector::Common::UuidMixin
       include IPaaS::Connector::Dsl::HelpersMixin
 
+      cattr_accessor :proc_validations_factory, instance_accessor: false do
+        -> { Set.new }
+      end
+
       attribute :version # source file hash
       attribute :name, required: true, length: { in: 3..120 }
       attribute :avatar, format: { with: IPaaS::Connector::Types::AVATAR_REGEXP }
@@ -52,7 +56,7 @@ module IPaaS
 
         IPaaS::Connector::InboundConnectionTemplate.new.tap do |inbound|
           @inbound_connection = inbound
-          inbound.connector = self
+          owned_by(inbound, self)
           inbound.helpers_definition.parent_helpers = self.helpers_definition
           inbound.instance_eval(&block)
         end
@@ -64,7 +68,7 @@ module IPaaS
 
         IPaaS::Connector::OutboundConnectionTemplate.new.tap do |outbound|
           @outbound_connection = outbound
-          outbound.connector = self
+          owned_by(outbound, self)
           outbound.helpers_definition.parent_helpers = self.helpers_definition
           outbound.instance_eval(&block)
         end
@@ -77,7 +81,7 @@ module IPaaS
         end
 
         IPaaS::Connector::TriggerTemplate.new(uuid).tap do |t|
-          t.connector = self
+          owned_by(t, self)
           triggers << t
           t.helpers_definition.parent_helpers = self.helpers_definition
           t.instance_eval(&block)
@@ -88,7 +92,7 @@ module IPaaS
         return actions.detect { |template| template.uuid == uuid } unless block
 
         IPaaS::Connector::ActionTemplate.new(uuid).tap do |a|
-          a.connector = self
+          owned_by(a, self)
           actions << a
           a.helpers_definition.parent_helpers = self.helpers_definition
           a.instance_eval(&block)
@@ -97,6 +101,19 @@ module IPaaS
 
       def helper(name, &block)
         helpers_definition.define_helper(name, &block)
+      end
+
+      # Every registry this connector owns, sealed before any solution code can run.
+      # Read through the accessor, not the ivar: an unmade registry would stay writable.
+      def seal_helpers!
+        [self, inbound_connection, outbound_connection, *triggers, *actions].compact.each do |owner|
+          owner.helpers_definition.freeze
+        end
+      end
+
+      # No need to lock, a race condition only costs a few extra validations.
+      def proc_validations
+        @proc_validations ||= self.class.proc_validations_factory.call
       end
 
       def update_available?

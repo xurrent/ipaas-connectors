@@ -4,7 +4,8 @@ module IPaaS
       module ProcRules
         BASIC_RULES = [
           NoConstDefRule,
-          NoGlobalAccessRule,
+          ValidConstantsRule,
+          NoSharedVariableAccessRule,
           NoMethodDefRule,
           NoExecRule,
           NoRescueExceptionRule,
@@ -16,9 +17,10 @@ module IPaaS
         ].freeze
 
         class NodeValidator
-          attr_reader :rules
+          attr_reader :rules, :procedure
 
-          def initialize(**)
+          def initialize(procedure: nil, **)
+            @procedure = procedure
             @rules = create_rules(**)
           end
 
@@ -27,8 +29,20 @@ module IPaaS
           end
 
           def create_rules(context:, on_invalid:, field:)
-            BASIC_RULES.map { |c| c.new(context, on_invalid: on_invalid) } +
+            BASIC_RULES.map { |c| build(c, context, on_invalid) } +
               FIELD_RULES.map { |c| c.new(context, on_invalid: on_invalid, field: field) }
+          end
+
+          private
+
+          # The constants a block may read depend on the file it was written in, so that rule alone
+          # is handed the block; no other rule gets to read it by accident.
+          def build(rule_class, context, on_invalid)
+            if rule_class == ValidConstantsRule
+              rule_class.new(context, on_invalid: on_invalid, procedure: procedure)
+            else
+              rule_class.new(context, on_invalid: on_invalid)
+            end
           end
         end
       end

@@ -4,7 +4,7 @@ class RubyConnector < IPaaS::Connector::Definition
     avatar '/assets/icons/gem.svg'
     description <<~END_OF_DESCRIPTION
       ## Overview
-      Runs a user-supplied Ruby script inside a sandbox. The script is validated against an allowlist of methods before execution. This connector does **not** execute arbitrary Ruby, and `eval`, `system`, `exec`, `require`, `instance_eval`, direct instance / global variables, and method / constant definitions are all rejected. Use it for in-runbook data transformation, validation, and small computations that don't justify a dedicated connector.
+      Runs a user-supplied Ruby script inside a sandbox. The script is validated against an allowlist of methods, and of the classes it may name, before execution. This connector does **not** execute arbitrary Ruby, and `eval`, `system`, `exec`, `require`, `instance_eval`, direct instance / global variables, and method / constant definitions are all rejected. Use it for in-runbook data transformation, validation, and small computations that don't justify a dedicated connector.
 
       ## Prerequisites
       - Familiarity with Ruby syntax and with the allowed methods listed under the **Evaluate Ruby Code** action.
@@ -86,6 +86,9 @@ class RubyConnector < IPaaS::Connector::Definition
 
       Calling anything outside the allowlist (including `eval`, `system`, `exec`, `require`, `instance_eval`, method / constant definitions, direct instance / class / global variables) is rejected at validation time with `Method '<name>' not allowed.`.
 
+      #### Allowed classes
+      A script may name only an approved class or module, matched by exact name (for example `Time`, `Date`, `JSON`, `URI`, `Base64`, `SecureRandom`, `Digest::SHA256`, `OpenSSL::HMAC`, `StandardError`, `ArgumentError`), and may call only the approved methods on each (`JSON.parse`, `Time.now`, `Base64.encode64`, …). A class may otherwise appear only where the construct consumes it: a `rescue` list, a `when` condition, a pattern match, or an argument to `raise`, `is_a?`, `kind_of?` or `instance_of?`. It may not be assigned to a variable, placed in a literal or passed to anything else. For the full authoritative list, see `connector/lib/ipaas/connector/common/proc_rules/valid_constants_rule.rb`.
+
       #### Available iPaaS helpers
       In addition to the allowed Ruby methods, the platform provides the helpers below.
 
@@ -151,6 +154,9 @@ class RubyConnector < IPaaS::Connector::Definition
       | Stage | Trigger | Message shape |
       |---|---|---|
       | Script validation (before execution) | Disallowed method call | `Method '<name>' not allowed.` |
+      | Script validation (before execution) | Class or module not on the approved list | `Access to '<Name>' is not allowed in expressions; only an approved set of classes is available. Please file a request if access is needed.` |
+      | Script validation (before execution) | Unapproved method on an approved class | `Calling '<method>' on '<Name>' is not allowed in expressions; only approved methods of approved classes are available. Please file a request if access is needed.` |
+      | Script validation (before execution) | Approved class used as a value (assigned, in a literal, passed on) | `'<Name>' may only be called, rescued, raised or tested in expressions, not passed on as a value.` |
       | Script validation (before execution) | `action_output('<ref>')` references a step that doesn't exist | `(proc) invalid action references: '<ref>', …` |
       | Input validation (before execution) | `input` values don't match `input_schema` types / required flags | `Nested field 'input' invalid: Type of field '<x>' invalid, expected <T> found <U>.` |
       | Runtime | Any uncaught exception raised inside the script | The exception class and message propagate |
@@ -181,7 +187,7 @@ class RubyConnector < IPaaS::Connector::Definition
       name 'Evaluate Ruby Code'
       avatar '/assets/icons/gem.svg'
       description <<~END_OF_DESCRIPTION
-        Runs a Ruby script with caller-defined input and output schemas. Values assigned to `output[:field]` inside the script are returned under `results`. The script is validated against an allowlist of methods before execution. This action does **not** execute arbitrary Ruby.
+        Runs a Ruby script with caller-defined input and output schemas. Values assigned to `output[:field]` inside the script are returned under `results`. The script is validated against an allowlist of methods, and of the classes it may name, before execution. This action does **not** execute arbitrary Ruby.
 
         ### Common Use Cases
         - **Reshape action output**: map `action_output('list_devices')` into a slimmer array of hashes before handing it to the next step.
@@ -248,6 +254,9 @@ class RubyConnector < IPaaS::Connector::Definition
 
         Calling anything outside the allowlist (including `eval`, `system`, `exec`, `require`, `instance_eval`, method / constant definitions, direct instance / class / global variables) is rejected at validation time with `Method '<name>' not allowed.`.
 
+        #### Allowed classes
+        A script may name only an approved class or module, matched by exact name (for example `Time`, `Date`, `JSON`, `URI`, `Base64`, `SecureRandom`, `Digest::SHA256`, `OpenSSL::HMAC`, `StandardError`, `ArgumentError`), and may call only the approved methods on each (`JSON.parse`, `Time.now`, `Base64.encode64`, …). A class may otherwise appear only where the construct consumes it: a `rescue` list, a `when` condition, a pattern match, or an argument to `raise`, `is_a?`, `kind_of?` or `instance_of?`. It may not be assigned to a variable, placed in a literal or passed to anything else. For the full authoritative list, see `connector/lib/ipaas/connector/common/proc_rules/valid_constants_rule.rb`.
+
         ### Available iPaaS helpers
         In addition to the allowed Ruby methods, the platform provides the helpers below.
 
@@ -313,6 +322,9 @@ class RubyConnector < IPaaS::Connector::Definition
         | Stage | Trigger | Message shape |
         |---|---|---|
         | Script validation (before execution) | Disallowed method call | `Method '<name>' not allowed.` |
+        | Script validation (before execution) | Class or module not on the approved list | `Access to '<Name>' is not allowed in expressions; only an approved set of classes is available. Please file a request if access is needed.` |
+        | Script validation (before execution) | Unapproved method on an approved class | `Calling '<method>' on '<Name>' is not allowed in expressions; only approved methods of approved classes are available. Please file a request if access is needed.` |
+        | Script validation (before execution) | Approved class used as a value (assigned, in a literal, passed on) | `'<Name>' may only be called, rescued, raised or tested in expressions, not passed on as a value.` |
         | Script validation (before execution) | `action_output('<ref>')` references a step that doesn't exist | `(proc) invalid action references: '<ref>', …` |
         | Input validation (before execution) | `input` values don't match `input_schema` types / required flags | `Nested field 'input' invalid: Type of field '<x>' invalid, expected <T> found <U>.` |
         | Runtime | Any uncaught exception raised inside the script | The exception class and message propagate |

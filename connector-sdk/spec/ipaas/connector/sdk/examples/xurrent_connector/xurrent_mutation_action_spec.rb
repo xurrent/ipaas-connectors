@@ -165,6 +165,17 @@ describe 'Xurrent Mutation Action', :action do
       error_subfields = errors_field.fields.map(&:id)
       expect(error_subfields).to include(:message, :path)
     end
+
+    context 'when the author unchecks a top-level payload include' do
+      let(:action_input) do
+        { mutation: 'requestCreate', input: { 'subject' => 'Test' },
+          include_fields: { request: false }, }
+      end
+
+      it 'leaves the unchecked field out of the output schema' do
+        expect(action.output_schemas.first.fields.map(&:id)).not_to include(:request)
+      end
+    end
   end
 
   describe 'nested input mapping (GUI scenario)' do

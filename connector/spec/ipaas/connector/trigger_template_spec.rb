@@ -2,7 +2,7 @@ require 'spec_helper'
 
 describe IPaaS::Connector::TriggerTemplate do
   let(:trigger_template) do
-    IPaaS::Connector::TriggerTemplate.new('uuid') do
+    spec_connector.trigger('uuid') do
       name 'Test Template'
       # required function
       parse do

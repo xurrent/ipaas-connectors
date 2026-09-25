@@ -244,6 +244,36 @@ describe IPaaS::Connector::Dsl::SchemaMixin do
       expect(foo_tester.foo.field(:bar).field(:sub).hint).to eq('Sub field')
     end
 
+    it 'hands every field the connector of the object declaring the schema, nested and wrapped alike' do
+      foo_tester = Class.new(DslTester) do
+        schema :foo
+      end.new
+      foo_tester.foo do
+        field :bar, 'bar', :nested do
+          field :sub, 'sub', :integer
+        end
+        field :wrapped, 'Wrapped', :string
+        field field(:wrapped) do
+          hint 'wrapped'
+        end
+      end
+
+      fields = foo_tester.foo.fields
+      expect(fields.map(&:id)).to eq([:bar, :wrapped, :wrapped])
+      expect(fields.last.hint).to eq('wrapped')
+      expect(fields.map(&:connector)).to all(be(foo_tester.connector))
+      expect(fields.first.field(:sub).connector).to be(foo_tester.connector)
+      expect(fields.first.deep_dup.connector).to be(foo_tester.connector)
+    end
+
+    it 'refuses a schema block on an owner with no connector, whatever the block contains' do
+      allow(IPaaS.default_logger).to receive(:warn)
+      orphan = IPaaS::Connector::Action.new('orphan')
+
+      expect { orphan.output_schema('out') { field :value, 'Value', :string } }
+        .to raise_error(IPaaS::Connector::Common::ProcHelper::MissingValidationStore)
+    end
+
     it 'should validate subfields' do
       foo_tester = Class.new(DslTester) do
         schema :foo

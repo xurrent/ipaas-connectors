@@ -159,7 +159,10 @@ describe IPaaS::Connector::Common::ProcRules::NoSafePresentRule do
       expect(helper.errors).to include(
         'Safe navigation with &.present? is not allowed for required boolean fields. Use explicit nil checking instead.'
       )
-      expect(helper.errors).to include("Calling methods on 'ENV' not allowed.")
+      expect(helper.errors).to include(
+        "Access to 'ENV' is not allowed in expressions; only an approved set of classes is available. " \
+        'Please file a request if access is needed.',
+      )
     end
 
     it 'should work with method definition rules' do

@@ -1104,7 +1104,7 @@ describe IPaaS::Connector::Action do
 
   describe 'disable_output_schema_name_mapping' do
     let(:action_template_with_disabled_mapping) do
-      IPaaS::Connector::ActionTemplate.new('disabled-mapping-template') do
+      spec_connector.action('disabled-mapping-template') do
         name 'Test Action'
         disable_output_schema_name_mapping true
 
@@ -1115,7 +1115,7 @@ describe IPaaS::Connector::Action do
     end
 
     let(:action_template_with_enabled_mapping) do
-      IPaaS::Connector::ActionTemplate.new('enabled-mapping-template') do
+      spec_connector.action('enabled-mapping-template') do
         name 'Test Action'
         disable_output_schema_name_mapping false
 
@@ -1207,7 +1207,7 @@ describe IPaaS::Connector::Action do
 
   describe 'output_schema_name_mapping' do
     let(:action_template_with_mapping) do
-      IPaaS::Connector::ActionTemplate.new('mapping-template') do
+      spec_connector.action('mapping-template') do
         name 'Test Action'
 
         output_schema 'schema1' do

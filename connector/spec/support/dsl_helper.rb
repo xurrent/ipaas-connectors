@@ -1,9 +1,14 @@
 class DslTester
   include IPaaS::Connector::Common::Model # includes AttributeMixin
+
   def self.model_name
     ActiveModel::Name.new(self, nil, 'Tester')
   end
   attribute :dynamic_field, type: Symbol, default: :bar
+
+  def connector
+    @connector ||= new_spec_connector
+  end
 end
 
 def skip_function_capture_validation

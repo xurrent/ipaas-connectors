@@ -449,20 +449,6 @@ describe IPaaS::Connector::Connection do
             when 'invalid-status' then { status: :weird, message: 'x' }
             when 'not-a-hash' then 'nope'
             when 'ipaas-error' then raise IPaaS::Error, 'boom'
-            when 'read-timeout' then raise Faraday::TimeoutError, 'execution expired'
-            when 'open-timeout'
-              # Mirror faraday-net_http: an open timeout is re-raised as ConnectionFailed.
-              begin
-                raise Net::OpenTimeout, 'execution expired'
-              rescue Net::OpenTimeout => e
-                raise Faraday::ConnectionFailed, e
-              end
-            when 'dns-failure'
-              begin
-                raise SocketError, 'getaddrinfo: name unknown'
-              rescue SocketError => e
-                raise Faraday::ConnectionFailed, e
-              end
             else raise 'kaboom'
             end
           end
@@ -524,22 +510,43 @@ describe IPaaS::Connector::Connection do
         expect(tester_connection('anything-else').config_tester).to eq({ status: :error, message: 'kaboom' })
       end
 
+      # Transport errors come out of the HTTP client, not out of authored code, which may not name
+      # those classes; so they are raised from the function-call seam the client sits behind.
+      def failing_tester(error)
+        connection = tester_connection('success')
+        allow(connection.connection_definition)
+          .to receive(:call_function).with(:config_tester, connection).and_raise(error)
+        connection
+      end
+
+      def wrapped_in_connection_failed(inner)
+        begin
+          raise inner
+        rescue inner.class => e
+          raise Faraday::ConnectionFailed, e
+        end
+      rescue Faraday::ConnectionFailed => e
+        e
+      end
+
       it 'converts a read timeout into a timed-out error result' do
-        expect(tester_connection('read-timeout').config_tester)
+        expect(failing_tester(Faraday::TimeoutError.new('execution expired')).config_tester)
           .to eq({ status: :error, message: 'The connection test timed out.' })
       end
 
       it 'converts an open timeout wrapped in a connection failure into a timed-out error result' do
         # faraday-net_http delivers Net::OpenTimeout as Faraday::ConnectionFailed.
-        expect(tester_connection('open-timeout').config_tester)
-          .to eq({ status: :error, message: 'The connection test timed out.' })
+        error = wrapped_in_connection_failed(Net::OpenTimeout.new('execution expired'))
+
+        expect(failing_tester(error).config_tester).to eq({ status: :error, message: 'The connection test timed out.' })
       end
 
       it 'keeps the message of a connection failure that is not a timeout' do
         # Contrast with the open-timeout case: Faraday::ConnectionFailed also
         # covers DNS and refused connections, which must not read as timeouts.
-        expect(tester_connection('dns-failure').config_tester)
-          .to eq({ status: :error, message: 'getaddrinfo: name unknown' })
+        error = wrapped_in_connection_failed(SocketError.new('getaddrinfo: name unknown'))
+
+        expect(failing_tester(error).config_tester).to eq({ status: :error, message: 'getaddrinfo: name unknown' })
       end
 
       it 'returns an error result without invoking the function when the config is invalid' do
@@ -712,6 +719,29 @@ describe IPaaS::Connector::Connection do
       klass.validators_on(attribute)
            .map { |validator| [validator.kind, validator.options] }
            .sort_by { |kind, _options| kind.to_s }
+    end
+  end
+
+  describe 'schema blocks copied from the connection template' do
+    it 'keep the template connector as their owner when the connection connector is reassigned' do
+      owner = IPaaS::Connector::Connector.new('schema-owner') do
+        name 'Schema owner'
+        inbound_connection do
+          api_key_validator
+          config_schema { field :foo, 'Foo', :string }
+        end
+      end
+      other = IPaaS::Connector::Connector.new('other-owner') { name 'Other' }
+      connection = IPaaS::Connector::Connection.new('copied').tap do |c|
+        c.direction :inbound
+        c.connector owner
+        c.copy_schema_blocks_from(owner.inbound_connection, :config_schema)
+      end
+
+      connection.connector(other)
+
+      expect(connection.connector).to be(other)
+      expect(connection.config_schema.connector).to be(owner)
     end
   end
 end

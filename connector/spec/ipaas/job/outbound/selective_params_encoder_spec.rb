@@ -67,6 +67,10 @@ describe IPaaS::Job::Outbound::SelectiveParamsEncoder do
       expect(described_class.encode({ 'q' => [raw.call('A'), raw.call('B')] })).to eq('q=A&q=B')
     end
 
+    it 'should emit a bare semicolon inside a raw value untouched' do
+      expect(described_class.encode({ 'd' => raw.call('sig;api_key=EVIL') })).to eq('d=sig;api_key=EVIL')
+    end
+
     it 'should escape only the ordinary element of a mixed repeated parameter' do
       expect(described_class.encode({ 'q' => [raw.call('a%3B'), 'x y'] })).to eq('q=a%3B&q=x+y')
     end
@@ -96,6 +100,28 @@ describe IPaaS::Job::Outbound::SelectiveParamsEncoder do
 
     it 'should return nil for nil params' do
       expect(described_class.encode(nil)).to be_nil
+    end
+  end
+
+  describe '.encode with a raw value that escaped its own guard' do
+    # RawParamValue refuses these at construction, so the only way to reach the wire with one is a
+    # forged instance. The assertions exist for that impossible state, and these examples forge it.
+    def forged_raw(value)
+      IPaaS::Job::Outbound::RawParamValue.new('ok').tap do |raw_value|
+        raw_value.instance_variable_set(:@value, value.dup.freeze)
+      end
+    end
+
+    it 'should raise on a raw value that reached the wire with a bare ampersand' do
+      expect { described_class.encode({ 'd' => forged_raw('sig&api_key=EVIL') }) }
+        .to raise_error(IPaaS::Error, /reached the wire with a bare '&' at index 3/)
+    end
+
+    it 'should raise on an encoded query that still carries a character the URL layer deletes' do
+      ["a\tb", "a\rb", "a\nb"].each do |value|
+        expect { described_class.encode({ 'd' => forged_raw(value) }) }
+          .to raise_error(IPaaS::Error, /carries a tab, carriage return or newline/)
+      end
     end
   end
 
@@ -145,17 +171,16 @@ describe IPaaS::Job::Outbound::RawParamValue do
   it 'should refuse a value containing a bare ampersand' do
     # Unescaped, it would split into a second query parameter on an authenticated request.
     expect { described_class.new('sig&api_key=EVIL') }
-      .to raise_error(IPaaS::Error, /must not contain '&', ';', a tab/)
+      .to raise_error(IPaaS::Error, /must not contain '&', a tab/)
   end
 
   it 'should accept an encoded ampersand, which is what a signed URL actually carries' do
     expect(described_class.new('sig%26api_key').to_s).to eq('sig%26api_key')
   end
 
-  it 'should refuse a value containing a bare semicolon' do
-    # URI::Generic#query= passes `;` through untouched and CGI.parse, PHP and Jetty split on it.
-    expect { described_class.new('sig;api_key=EVIL') }
-      .to raise_error(IPaaS::Error, /must not contain '&', ';', a tab/)
+  it 'should accept a bare semicolon, which a CloudFront signed URL carries as is' do
+    # The encoder joins parameters with `&` only, so a `;` stays inside its value on the wire.
+    expect(described_class.new('text/plain;charset=utf-8').to_s).to eq('text/plain;charset=utf-8')
   end
 
   it 'should accept an encoded semicolon, which is what a signed URL actually carries' do
@@ -166,7 +191,7 @@ describe IPaaS::Job::Outbound::RawParamValue do
     # URI::Generic#query= runs delete!("\t\r\n"), so these corrupt the signature with no error.
     ["sig\nature", "sig\tature", "sig\rature"].each do |value|
       expect { described_class.new(value) }
-        .to raise_error(IPaaS::Error, /must not contain '&', ';', a tab/)
+        .to raise_error(IPaaS::Error, /must not contain '&', a tab/)
     end
   end
 
@@ -191,10 +216,10 @@ describe IPaaS::Job::Outbound::RawParamValue do
 
   it 'should name the offending character and its position rather than echoing the value' do
     # The documented payload is a signature, so the message must not put it in the job log.
-    expect { described_class.new('SUPER;SECRET') }
+    expect { described_class.new('SUPER&SECRET') }
       .to raise_error(IPaaS::Error, /found one at index 5/)
-    expect { described_class.new('SUPER;SECRET') }
-      .to(raise_error { |error| expect(error.message).not_to include('SUPER;SECRET') })
+    expect { described_class.new('SUPER&SECRET') }
+      .to(raise_error { |error| expect(error.message).not_to include('SUPER&SECRET') })
   end
 
   it 'should not read a later mutation of the string it was built from' do

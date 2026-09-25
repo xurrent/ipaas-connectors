@@ -1752,7 +1752,8 @@ class XurrentAppConnector < IPaaS::Connector::Definition
       helpers.extract_automation_rules(app_offering)
 
       app_offering.delete('id')
-      app_offering['newScopes'] = app_offering.delete('scopes') if app_offering['scopes'].present?
+      scopes = app_offering.delete('scopes')
+      app_offering['newScopes'] = scopes if scopes.present?
       app_offering['newScopes']&.each { |new_scope| new_scope.delete('id') }
       app_offering['source'] = 'Xurrent App Connector'
       app_offering['sourceID'] = trigger.runbook.uuid

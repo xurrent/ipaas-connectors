@@ -16,6 +16,8 @@ module IPaaS
             :tap,
             :itself,
             :is_a?,
+            :kind_of?,
+            :instance_of?,
             :to_json,
             :pretty_generate,
             :Float,
@@ -90,7 +92,6 @@ module IPaaS
             :/,
             :%,
             :*,
-            :ˆ,
             :**,
             :to_s,
             :times,
@@ -158,6 +159,7 @@ module IPaaS
             :Array,
             :[],
             :<<,
+            :|,
             :push,
             :length,
             :size,
@@ -318,6 +320,7 @@ module IPaaS
             :params,
             :'params=',
             :path,
+            :'path=', # URI::Generic#path, appended to when a connector builds a sub-path
             :property,
             :request,
             :run,
@@ -356,6 +359,24 @@ module IPaaS
             validate_method(method_name)
           end
           alias on_csend on_send
+
+          # Judges an op-assign as the explicit expansion it stands for: the operator it dispatches,
+          # and the setter, which the child `send` names as the reader it expands from.
+          def on_op_asgn(node)
+            target = node.children[0]
+
+            validate_method(node.children[1]) if node.op_asgn_type?
+
+            return unless target.call_type?
+            return if top_level_helper?(target.children.first)
+
+            validate_method(:"#{target.method_name}=")
+          end
+          # `||=`/`&&=` dispatch no operator; their second child is the value, not a method name.
+          # These must not call `super`: it resolves by the defining name, so an `or_asgn` would
+          # reach `Traversal#on_op_asgn` and raise past `valid?`, which rescues only SystemStackError.
+          alias on_or_asgn on_op_asgn
+          alias on_and_asgn on_op_asgn
 
           def validate_method(method_name)
             return if RUBY_METHODS.include?(method_name)

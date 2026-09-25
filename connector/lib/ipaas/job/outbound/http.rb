@@ -5,6 +5,11 @@ module IPaaS
         OPEN_TIMEOUT = 5 # 5 seconds
         TIMEOUT = 300 # 5 minutes
         VALID_METHODS = IPaaS.make_shareable(Faraday::Connection::METHODS.dup)
+        DEFAULT_ARRAY_PARAMS = :nested
+        ARRAY_PARAMS_ENCODERS = IPaaS.make_shareable({
+          nested: IPaaS::Job::Outbound::SelectiveParamsEncoder,
+          flat: IPaaS::Job::Outbound::FlatSelectiveParamsEncoder,
+        })
 
         extend ActiveSupport::Concern
         extend IPaaS::Connector::Common::ProcRules::ProcSafe
@@ -15,11 +20,14 @@ module IPaaS
                   :multipart_post, :create_text_part, :create_binary_part, :raw_param_value
 
         included do
-          def http_connection(uri, skip_authentication: false, open_timeout: nil, timeout: nil)
+          def http_connection(uri, skip_authentication: false, open_timeout: nil, timeout: nil,
+                              array_params: DEFAULT_ARRAY_PARAMS)
             IPaaS::Job::Outbound::HTTP.validate_uri!(uri)
             IPaaS::Job::Outbound::HTTP.validate_timeouts!(open_timeout, timeout)
+            IPaaS::Job::Outbound::HTTP.validate_array_params!(array_params)
             faraday_for(uri, skip_authentication: skip_authentication,
-                             request_options: request_options(open_timeout: open_timeout, timeout: timeout))
+                             request_options: request_options(open_timeout: open_timeout, timeout: timeout,
+                                                              array_params: array_params))
           end
 
           def faraday_for(uri, skip_authentication:, request_options:)
@@ -88,12 +96,12 @@ module IPaaS
 
           private
 
-          def request_options(open_timeout: nil, timeout: nil)
+          def request_options(open_timeout:, timeout:, array_params:)
             {
               open_timeout: open_timeout || OPEN_TIMEOUT,
               timeout: timeout || TIMEOUT,
               proxy: proxy_config,
-              params_encoder: IPaaS::Job::Outbound::SelectiveParamsEncoder,
+              params_encoder: ARRAY_PARAMS_ENCODERS.fetch(array_params),
             }
           end
 
@@ -139,6 +147,14 @@ module IPaaS
             return unless open_timeout && timeout && open_timeout >= timeout
 
             raise IPaaS::Error, "open_timeout #{open_timeout}s must be less than timeout #{timeout}s."
+          end
+
+          def validate_array_params!(array_params)
+            return if ARRAY_PARAMS_ENCODERS.key?(array_params)
+
+            raise ArgumentError,
+                  "array_params must be one of #{ARRAY_PARAMS_ENCODERS.keys.map(&:inspect).join(', ')}, " \
+                  "found #{array_params.inspect}."
           end
 
           def validate_headers!(headers)

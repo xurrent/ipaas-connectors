@@ -45,6 +45,9 @@ module IPaaS
                                  'pill is used directly in code, or place the pill inside a ' \
                                  'double-quoted string.'.freeze
 
+        UNATTRIBUTED_BLOCK_MESSAGE = 'A block defined inside an expression cannot be validated. ' \
+                                     'Define it in the connector instead.'.freeze
+
         # Field attributes any FIELD_RULES rule may consult to decide
         # validity. Today only `NoSafePresentRule` reads the field, and it
         # branches on `(required && type == :boolean)`. If a future rule
@@ -52,7 +55,19 @@ module IPaaS
         # this list. The contract-guard spec enforces this stays in sync.
         FIELD_VALIDATION_ATTRIBUTES = [:required, :type].freeze
 
+        # A block from one of this gem's own files is ours whichever connector runs it, so its verdict
+        # is process-wide. Spelled the way Ruby reports source_location, not through __dir__, which
+        # resolves symlinks that a loaded file's path keeps.
+        GEM_LIB = "#{File.expand_path('../../..', File.dirname(__FILE__))}/".freeze
+
+        # Where a String proc's lambdas are born. Such a block has no connector to answer for it and
+        # is not the gem's either, so it is refused rather than judged.
+        STRING_PROC_FILE = File.expand_path(__FILE__).freeze
+
         class InvalidProcCalled < IPaaS::Error
+        end
+
+        class MissingValidationStore < IPaaS::Error
         end
 
         class RecursiveProcError < IPaaS::Error
@@ -144,6 +159,10 @@ module IPaaS
             SourceParser.read(source)
           end
 
+          def gem_file?(file)
+            file&.start_with?(GEM_LIB) || false
+          end
+
           # Why a source must not be evaluated, or nil when it may be. One that will not parse is
           # refused rather than evaluated to find out why: it can never run, and evaluating it
           # requires much more work than parsing it does before reaching the same conclusion.
@@ -190,16 +209,23 @@ module IPaaS
         attr_reader :declared_context
         attr_accessor :procedure, :source, :on_invalid
 
-        def initialize(context, procedure, on_invalid: nil, field: nil)
+        def initialize(context, procedure, on_invalid: nil, field: nil, connector: nil)
           @declared_context = context
           @procedure = procedure
           @source = procedure.is_a?(String) ? procedure : self.class.proc_source(procedure)
           @on_invalid = on_invalid
           @field = field
+          @connector = connector
         end
 
         def errors
           errors_by_helper[self] ||= []
+        end
+
+        # The default inspect would print the whole connector graph through @connector, once per
+        # helper, wherever a template or trigger is inspected.
+        def inspect
+          "ProcHelper (#{source_origin})"
         end
 
         def errors=(value)
@@ -208,13 +234,7 @@ module IPaaS
 
         def valid?
           self.errors = []
-          return true if validated_before.include?(validation_cache_key)
-
-          validate_before_parsing
-          return false if errors.any?
-
-          validate_nodes(parse_ast)
-          self.errors.none?.tap { |valid| validated_before.add(validation_cache_key) if valid }
+          judged_valid?(validation_store)
         rescue SystemStackError
           refuse_stack_exhausted
           false
@@ -239,6 +259,56 @@ module IPaaS
         end
 
         private
+
+        def judged_valid?(store)
+          return false if store.nil?
+          return true if store.include?(validation_cache_key)
+
+          validate_before_parsing
+          return false if errors.any?
+
+          validate_nodes(parse_ast)
+          self.errors.none?.tap { |valid| store.add(validation_cache_key) if valid }
+        end
+
+        # Which store may answer for this block is decided by where the block was written, never by
+        # who runs it: a connector-scoped verdict must not land in the process-wide set.
+        def validation_store
+          case block_origin
+          when :global then validated_before
+          when :string_born
+            refuse_unattributed_block
+            nil
+          else connector_store
+          end
+        end
+
+        def block_origin
+          return :global if procedure.is_a?(String)
+
+          file = procedure.source_location&.first
+          return :string_born if file == STRING_PROC_FILE
+          return :global if self.class.gem_file?(file)
+
+          :connector
+        end
+
+        def connector_store
+          # Our class is the receiver so the judged object never gets to answer the check.
+          return @connector.proc_validations if IPaaS::Connector::Connector === @connector # rubocop:disable Style/CaseEquality
+
+          # No owner is a programming error rather than authored input, so it raises where a block born inside an
+          # expression falls closed: a field error here would silently blank whatever it mapped.
+          log_unexpected('no connector owns the block')
+          raise MissingValidationStore, 'No connector owns this block, so its validation cannot be recorded.'
+        end
+
+        def refuse_unattributed_block
+          # Raising would turn one planted block into a 500 on every later render of the shared graph.
+          # Logged first: `validation_error` reaches an `on_invalid` that may raise.
+          log_unexpected('block born inside an expression')
+          validation_error(UNATTRIBUTED_BLOCK_MESSAGE)
+        end
 
         def executing
           guard_against_recursion!
@@ -300,7 +370,7 @@ module IPaaS
         def validate_nodes(ast)
           node_validator = ProcRules::NodeValidator.new(context: effective_context,
                                                         on_invalid: ->(message) { validation_error(message) },
-                                                        field: @field)
+                                                        field: @field, procedure: procedure)
           ast&.each_node { |node| node_validator.validate(node) }
         end
 
@@ -395,8 +465,15 @@ module IPaaS
           validation_error(BARE_DATA_PILL_MESSAGE)
         end
 
+        # A gem block is exempt from the class allow-list, and an expression of the same text shares
+        # its store, so the two verdicts are kept apart.
         def validation_cache_key
-          @validation_cache_key ||= "#{Digest::SHA256.hexdigest(source)}:#{field_validation_class}".freeze
+          @validation_cache_key ||= [Digest::SHA256.hexdigest(source), field_validation_class,
+                                     *(:gem if gem_block?),].join(':').freeze
+        end
+
+        def gem_block?
+          !procedure.is_a?(String) && block_origin == :global
         end
 
         # Rule behavior may depend on field attributes. If so, those must be used in key otherwise

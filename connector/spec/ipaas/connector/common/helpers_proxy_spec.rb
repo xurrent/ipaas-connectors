@@ -252,6 +252,18 @@ describe IPaaS::Connector::Common::HelpersProxy do
         .to raise_error(ArgumentError, "Helper 'inspect' is reserved; choose another name.")
     end
 
+    it 'is refused under a name a proc may hand a class to, whatever the proxy is called by' do
+      helpers = IPaaS::Connector::Common::Helpers.new
+      reserved = IPaaS::Connector::Common::ProcRules::ValidConstantsRule::READ_METHODS
+
+      expect(reserved).not_to be_empty
+      reserved.each do |name|
+        expect { helpers.define_helper(name) { |klass| klass } }
+          .to raise_error(ArgumentError, "Helper '#{name}' is reserved; choose another name.")
+      end
+      expect { helpers.for_proc.raise(Time) }.to raise_error(NoMethodError, "Missing helper method 'raise'.")
+    end
+
     it 'allows a name the proxy does not answer' do
       helpers = IPaaS::Connector::Common::Helpers.new
 

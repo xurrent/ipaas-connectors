@@ -275,32 +275,48 @@ describe 'Checkmk Get Hosts Action', :action do
       end
     end
 
+    # WebMock cannot assert an exploded array: its URI normalization parses the query into a hash, so
+    # `hostnames=host1&hostnames=host2` and a bare `hostnames=host2` both reduce to one value and a
+    # stub matches either. Capture what the encoder puts on the wire instead. The capture doubles as
+    # the contrast case: nested mode never reaches this encoder, so `encoded_query` stays nil.
+    def encoded_query(input)
+      captured = nil
+      allow(IPaaS::Job::Outbound::FlatSelectiveParamsEncoder)
+        .to receive(:encode).and_wrap_original { |original, params| captured = original.call(params) }
+      output = trigger_action(input)
+      [captured, output]
+    end
+
+    let(:two_host_response) do
+      {
+        value: [
+          { id: 'rhost1', title: 'Host One', extensions: { folder: '/', attributes: { ipaddress: '10.0.1.1' } } },
+          { id: 'rhost2', title: 'Host Two', extensions: { folder: '/', attributes: { ipaddress: '10.0.1.2' } } },
+        ],
+      }.to_json
+    end
+
     context 'with hostnames filter' do
       let!(:stub) do
-        stub_request(:get, hosts_url)
-          .with(query: 'hostnames=host1&hostnames=host2')
-          .to_return(body: { value: [] }.to_json)
+        stub_request(:get, /#{Regexp.escape(hosts_url)}/).to_return(body: two_host_response)
       end
 
-      it 'encodes as explode-form array' do
-        trigger_action(hostnames: %w[host1 host2])
+      it 'sends every hostname as its own repeated parameter and returns each host' do
+        query, output = encoded_query(hostnames: %w[host1 host2])
+        expect(query).to eq('hostnames=host1&hostnames=host2')
+        expect(output[:hosts].map { |host| host[:id] }).to eq(%w[rhost1 rhost2])
         expect(stub).to have_been_requested.once
       end
     end
 
     context 'with hostnames and other filters combined' do
       let!(:stub) do
-        stub_request(:get, hosts_url)
-          .with(query: 'effective_attributes=false&include_links=false&hostnames=host1&hostnames=host2')
-          .to_return(body: { value: [] }.to_json)
+        stub_request(:get, /#{Regexp.escape(hosts_url)}/).to_return(body: two_host_response)
       end
 
-      it 'encodes both standard params and exploded hostnames' do
-        trigger_action(
-          effective_attributes: false,
-          include_links: false,
-          hostnames: %w[host1 host2],
-        )
+      it 'sends the scalar filters alongside every repeated hostname' do
+        query, = encoded_query(effective_attributes: false, include_links: false, hostnames: %w[host1 host2])
+        expect(query).to eq('effective_attributes=false&hostnames=host1&hostnames=host2&include_links=false')
         expect(stub).to have_been_requested.once
       end
     end

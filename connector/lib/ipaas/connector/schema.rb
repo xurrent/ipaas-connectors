@@ -3,11 +3,20 @@ module IPaaS
     class Schema
       extend IPaaS::Connector::Common::ProcRules::ProcSafe
 
-      proc_safe :includes, :after_update
+      proc_safe :includes, :after_update, :first_after_update_pass?
 
       include IPaaS::Connector::Common::Model
 
-      attr_accessor :connector, :reference, :shared
+      # Each pass reveals one more level of the fields an after_update derives from its values,
+      # and one further pass has to observe that nothing changed. GraphQL selections, the deepest
+      # case, are capped at IPaaS::Job::Graphql::Schema::MAX_FIELD_DEPTH (6), so 8 leaves headroom.
+      MAX_AFTER_UPDATE_PASSES = 8
+
+      class UnsettledAfterUpdate < IPaaS::Error
+      end
+
+      attr_reader :connector
+      attr_accessor :reference, :shared
       attribute :name, length: { in: 2..120 }
 
       schema_fields
@@ -68,10 +77,7 @@ module IPaaS
       end
 
       def deep_dup
-        super.tap do |duped|
-          duped.attributes = attributes.deep_dup
-          duped.connector = connector
-        end
+        super.tap { |duped| duped.attributes = attributes.deep_dup }
       end
 
       def includes(mixin)
@@ -92,6 +98,12 @@ module IPaaS
         Array(fields).any? { |field| field.is_a?(Field) && field.declares_secret_string? }
       end
 
+      # True while after_update is executing its first pass, so a connector can keep a
+      # side effect (a cache invalidation, a refetch) from repeating once per pass.
+      def first_after_update_pass?
+        @after_update_pass.nil? || @after_update_pass <= 1
+      end
+
       private
 
       def resolve_within_context(context, field_mapping, &block)
@@ -109,9 +121,7 @@ module IPaaS
         return values unless after_update
 
         using_context(context) do
-          # TODO: How to properly handle this error? It is most likely an issue in the connector itself
-          on_invalid = ->(msg) { raise("Schema '#{reference}' after_update failure: #{msg}") }
-          proc_helper = IPaaS::Connector::Common::ProcHelper.new(context, after_update, on_invalid: on_invalid)
+          proc_helper = after_update_helper(context)
           new_fields = IPaaS::Connector::Mapping::ResolvedMapping.tracking_resolution(context) do
             proc_helper.execute(self.fields, values)
           end
@@ -122,20 +132,52 @@ module IPaaS
         end
       end
 
+      def after_update_helper(context)
+        # TODO: How to properly handle this error? It is most likely an issue in the connector itself
+        on_invalid = ->(msg) { raise("Schema '#{reference}' after_update failure: #{msg}") }
+        IPaaS::Connector::Common::ProcHelper.new(context, after_update, on_invalid: on_invalid, connector: connector)
+      end
+
       def resolved_mapping(context, field_mapping)
         IPaaS::Connector::Mapping::ResolvedMapping.new(context, self.fields, field_mapping)
       end
 
-      def safe_resolve(context, field_mapping, values, was_resolving)
+      def safe_resolve(context, field_mapping, values, was_resolving, &block)
         begin
           values.resolve
-          yield values if block_given?
-          values = update_values_after_update(context, field_mapping, values) unless was_resolving
-          yield values if block_given?
+          block&.call(values)
+          values = run_after_update_passes(context, field_mapping, values, &block) if after_update && !was_resolving
         rescue StandardError, SystemStackError => e
           values.base_error = e
         end
         values
+      end
+
+      def run_after_update_passes(context, field_mapping, values, &block)
+        MAX_AFTER_UPDATE_PASSES.times do |pass|
+          @after_update_pass = pass + 1
+          previous = values.to_hash
+          values = next_after_update_values(context, field_mapping, values, &block)
+          return values if values.base_error || values.to_hash == previous
+        end
+        fail_unsettled_after_update(values)
+      ensure
+        @after_update_pass = nil
+      end
+
+      def next_after_update_values(context, field_mapping, values, &block)
+        update_values_after_update(context, field_mapping, values).tap { |v| block&.call(v) }
+      rescue StandardError, SystemStackError => e
+        values.tap { |v| v.base_error = e }
+      end
+
+      def fail_unsettled_after_update(values)
+        return values if values.invalid?
+
+        raise UnsettledAfterUpdate, "Schema '#{reference}' after_update kept changing the values over " \
+                                    "#{MAX_AFTER_UPDATE_PASSES} passes, so the fields it reveals never settled"
+      rescue StandardError => e
+        values.tap { |v| v.base_error = e }
       end
 
       def using_context(context)

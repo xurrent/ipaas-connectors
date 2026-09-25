@@ -5,7 +5,7 @@ module IPaaS
       include IPaaS::Connector::Common::Model
       include IPaaS::Connector::Dsl::HelpersMixin
 
-      attr_accessor :connector
+      attr_reader :connector
 
       attribute :validators, type: [Symbol], default: []
       validate :validators_valid?

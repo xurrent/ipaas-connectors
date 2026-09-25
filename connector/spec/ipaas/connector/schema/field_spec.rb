@@ -2,7 +2,11 @@ require 'spec_helper'
 
 describe IPaaS::Connector::Schema::Field do
   let(:field) do
-    IPaaS::Connector::Schema::Field.new(id: :foo, label: 'Foo label', type: :string)
+    owned_field(id: :foo, label: 'Foo label', type: :string)
+  end
+
+  def owned_field(**attributes)
+    owned_by_spec_connector(IPaaS::Connector::Schema::Field.new(**attributes))
   end
 
   # A block built inside a method so its binding holds no locals: the options function rejects
@@ -74,7 +78,7 @@ describe IPaaS::Connector::Schema::Field do
     end
 
     def field_with_options(type)
-      field = described_class.new(id: :picker, label: 'Picker', type: type)
+      field = owned_field(id: :picker, label: 'Picker', type: type)
       field.options(&picker_options)
       field
     end
@@ -106,8 +110,8 @@ describe IPaaS::Connector::Schema::Field do
     end
 
     def child_with_options
-      IPaaS::Connector::Schema::Field.new(id: :list_id, label: 'List', type: :string)
-                                     .tap { |child| child.options(&no_dependencies) }
+      owned_field(id: :list_id, label: 'List', type: :string)
+        .tap { |child| child.options(&no_dependencies) }
     end
 
     def child_without_options
@@ -144,6 +148,58 @@ describe IPaaS::Connector::Schema::Field do
       parent.valid?
 
       expect(parent.errors[:fields].join).not_to include(array_nesting_error)
+    end
+  end
+
+  describe 'inspect' do
+    it 'names the field without following the connector it belongs to' do
+      list = owned_field(id: :tags, label: 'Tags', type: :string, array: true)
+
+      expect(field.inspect).to eq('Field (foo) - string')
+      expect(list.inspect).to eq('Field (tags) - string[]')
+      expect(field.inspect).not_to include(spec_connector.uuid)
+    end
+  end
+
+  describe 'connector' do
+    let(:schema) { schema_with_connector('owned') { field :foo, 'Foo', :string } }
+
+    def expression(source)
+      IPaaS::Connector::Common::ProcHelper.new(schema, source)
+    end
+
+    def identity_validator = ->(value) { value }
+
+    it 'is read-only: no writer, and the reader takes no value' do
+      expect(field).not_to respond_to(:connector=)
+      expect { field.connector(spec_connector) }.to raise_error(ArgumentError)
+    end
+
+    it 'is refused as an assignment target in an expression' do
+      helper = expression('fields.first.connector = connector')
+
+      expect(helper.valid?).to be(false)
+      expect(helper.errors).to include("Method 'connector=' not allowed.")
+    end
+
+    it 'is refused in an op-assign too, which is judged as the setter it expands to' do
+      helper = expression('fields.first.connector &&= connector')
+
+      expect(helper.valid?).to be(false)
+      expect(helper.errors).to include("Method 'connector=' not allowed.")
+      expect(schema.fields.first.connector).to be(spec_connector)
+    end
+
+    it 'is dropped with the blocks when a field is rebuilt from its hash form' do
+      with_options = owned_field(id: :picker, label: 'Picker', type: :string)
+      with_options.options(&no_dependencies)
+      with_options.validator(&identity_validator)
+
+      rebuilt = IPaaS::Connector::Types::SchemaFieldType.resolve(with_options.to_h_ref)
+
+      expect(rebuilt.options).to be_nil
+      expect(rebuilt.validator).to be_nil
+      expect(rebuilt.connector).to be_nil
     end
   end
 

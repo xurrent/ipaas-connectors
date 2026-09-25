@@ -332,6 +332,8 @@ module IPaaS
             PERMITTED_PATHS.include?(path)
           end
 
+          # Kept apart from the proc rules' copy: this gate runs before any evaluation, and a change to a
+          # proc-rule helper must not be able to change what the loader refuses.
           def outermost_const(node)
             node = node.parent while node.parent&.const_type? && node.parent.children.first.equal?(node)
             node

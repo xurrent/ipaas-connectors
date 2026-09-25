@@ -51,6 +51,16 @@ describe 'GraphQL Mutation Action', :action do
       end
     end
 
+    context 'when the author unchecks a top-level payload include' do
+      let(:action_input) do
+        { mutation: 'createPost', input: { title: 'Test' }, include_fields: { post: false } }
+      end
+
+      it 'leaves the unchecked field out of the output schema' do
+        expect(action.output_schemas.first.fields.map(&:id)).not_to include(:post)
+      end
+    end
+
     it 'defines input field as required' do
       action.input_schema.field(:input).tap do |field|
         expect(field.label).to eq('Input')

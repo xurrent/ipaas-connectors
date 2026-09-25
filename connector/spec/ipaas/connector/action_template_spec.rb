@@ -2,7 +2,7 @@ require 'spec_helper'
 
 describe IPaaS::Connector::ActionTemplate do
   let(:action_template) do
-    IPaaS::Connector::ActionTemplate.new('uuid') do
+    spec_connector.action('uuid') do
       # required function
       run do
         'foo'

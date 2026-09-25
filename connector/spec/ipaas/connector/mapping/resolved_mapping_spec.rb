@@ -518,7 +518,7 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
 
       it 'should validate the validator proc' do
         validator = ->(value) { value.invalid_method(environment[:foo]) }
-        validator_schema = IPaaS::Connector::Schema.new('reference2') do
+        validator_schema = schema_with_connector('reference2') do
           field :foo, 'Foo', :string, validator: validator
         end
 
@@ -530,7 +530,7 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
 
       it 'should accept correct values' do
         validator = ->(value) { value.starts_with?('foo') }
-        validator_schema = IPaaS::Connector::Schema.new('reference2') do
+        validator_schema = schema_with_connector('reference2') do
           field :foo, 'Foo', :string, validator: validator
         end
 
@@ -540,7 +540,7 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
 
       it 'should validate using a validator proc' do
         validator = ->(value) { value.starts_with?('foo') }
-        validator_schema = IPaaS::Connector::Schema.new('reference2') do
+        validator_schema = schema_with_connector('reference2') do
           field :foo, 'Foo', :string, validator: validator
         end
 
@@ -549,9 +549,23 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
         expect(resolved.errors[:base]).to include("Field 'foo' is not valid.")
       end
 
+      it 'records the validator verdict in the store of the field connector' do
+        validator = ->(value) { value.starts_with?('foo') }
+        validator_schema = schema_with_connector('reference2') do
+          field :foo, 'Foo', :string, validator: validator
+        end
+        IPaaS::Connector::Common::ProcHelper.validated_before.clear
+
+        resolved = resolve([{ field_id: :foo, fixed: 'foo me' }], schema: validator_schema)
+
+        expect(resolved).to be_valid
+        expect(spec_connector.proc_validations.size).to eq(1)
+        expect(IPaaS::Connector::Common::ProcHelper.validated_before).to be_empty
+      end
+
       it 'should retrieve environment variables' do
         validator = ->(value) { value.starts_with?(environment[:foo]) }
-        validator_schema = IPaaS::Connector::Schema.new('reference2') do
+        validator_schema = schema_with_connector('reference2') do
           field :foo, 'Foo', :string, validator: validator
         end
 
@@ -569,7 +583,7 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
       context 'on nested field' do
         it 'should accept correct values' do
           validator = ->(value) { value[:foo].starts_with?('foo') }
-          validator_schema = IPaaS::Connector::Schema.new('reference3') do
+          validator_schema = schema_with_connector('reference3') do
             field :top, 'Top', :nested,
                   validator: validator do
               field :foo, 'Foo', :string
@@ -583,7 +597,7 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
 
         it 'should validate using a validator proc' do
           validator = ->(value) { value[:foo].starts_with?('foo') }
-          validator_schema = IPaaS::Connector::Schema.new('reference3') do
+          validator_schema = schema_with_connector('reference3') do
             field :top, 'Top', :nested,
                   validator: validator do
               field :foo, 'Foo', :string
@@ -1801,6 +1815,89 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
       resolved = resolve([{ field_id: :token, fixed: node }], schema: secret_schema)
       expect(resolved).not_to be_valid
       expect(resolved.errors[:base]).to include(node.message)
+    end
+  end
+
+  context 'a value the connector cannot handle' do
+    let(:text_schema) do
+      IPaaS::Connector::Schema.new('reference') do
+        field :body, 'Body', :string
+        field :size, 'Size', :integer
+        field :bodies, 'Bodies', :string, array: true
+        field :payload, 'Payload', :base64
+        field :cfg, 'Cfg', :nested do
+          field :name, 'Name', :string
+        end
+      end
+    end
+
+    let(:undecodable) { '"\xD3\xD4"' }
+
+    def validate_text(field_mapping)
+      IPaaS::Connector::Mapping::ResolvedMapping
+        .new(Object.new, text_schema.fields, field_mapping)
+        .tap(&:valid?)
+    end
+
+    def resolve_text(field_mapping)
+      resolve(field_mapping, schema: text_schema)
+    end
+
+    it 'reports a field whose validation raises instead of raising out of validation' do
+      resolved = validate_text([{ field_id: :body, proc: undecodable }])
+      expect(resolved.errors[:base])
+        .to eq(["Field 'body' raised ArgumentError: invalid byte sequence in UTF-8"])
+    end
+
+    it 'reports a field whose type conversion raises' do
+      resolved = validate_text([{ field_id: :size, proc: undecodable }])
+      expect(resolved.errors[:base])
+        .to eq(["Field 'size' raised ArgumentError: invalid byte sequence in UTF-8"])
+    end
+
+    it 'designates the offending element of an array field' do
+      resolved = validate_text([{ field_id: :bodies, proc: %(['ok', #{undecodable}]) }])
+      expect(resolved.errors[:base])
+        .to eq(["Field 'bodies[1]' raised ArgumentError: invalid byte sequence in UTF-8"])
+    end
+
+    it 'reports a nested sub-field rather than emptying the mapping' do
+      resolved = validate_text([{ field_id: :cfg, nested: [{ field_id: :name, proc: undecodable }] }])
+      expect(resolved.errors[:base]).to eq(
+        ["Nested field 'cfg' invalid: Field 'name' raised ArgumentError: invalid byte sequence in UTF-8"],
+      )
+    end
+
+    it 'lets a type that encodes the bytes itself resolve them' do
+      resolved = validate_text([{ field_id: :payload, proc: undecodable }])
+      expect(resolved[:payload]).to eq('09Q=')
+      expect(resolved).to be_valid
+    end
+
+    it 'leaves the value alone on the resolve a running job makes' do
+      resolved = resolve_text([{ field_id: :body, proc: undecodable }])
+      expect(resolved[:body].bytes).to eq([0xD3, 0xD4])
+      expect(resolved.errors[:base]).to be_empty
+    end
+
+    it 'keeps raising outside the validating pass, where there is nowhere to report' do
+      expect { resolve_text([{ field_id: :size, proc: undecodable }]) }
+        .to raise_error(ArgumentError, 'invalid byte sequence in UTF-8')
+    end
+
+    it 'leaves text that decodes untouched, binary or not' do
+      binary = resolve_text([{ field_id: :body, proc: 'Base64.decode64("09Q=")' }])
+      expect(binary[:body].bytes).to eq([0xD3, 0xD4])
+      expect(binary[:body].encoding).to eq(Encoding::ASCII_8BIT)
+      expect(binary).to be_valid
+      expect(resolve_text([{ field_id: :body, proc: '"café"' }])[:body]).to eq('café')
+    end
+
+    it 'reports a raise whose own message carries undecodable bytes' do
+      resolved = validate_text([{ field_id: :body, proc: 'raise ArgumentError, "bad: \xD3\xD4"' }])
+      expect(resolved.errors[:base])
+        .to eq(["Field 'body' code raised ArgumentError: bad: ��"])
+      expect(JSON.generate(resolved.errors[:base])).to be_a(String)
     end
   end
 end

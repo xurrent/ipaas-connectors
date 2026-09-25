@@ -120,6 +120,76 @@ describe IPaaS::Job::Outbound::HTTP do
     end
   end
 
+  describe 'array_params' do
+    let(:hostnames) { %w[host1 host2] }
+
+    # Asserted on the raw query string rather than through a stub URL: WebMock matches a stub by
+    # parsing both sides into a hash, and `h=host1&h=host2` parses to `{'h' => 'host2'}` there, so a
+    # stub URL cannot tell one occurrence of a repeated name from two.
+    def query_for(**)
+      stub_request(:get, /#{Regexp.escape(EXAMPLE_SERVER)}/o).to_return(body: 'ok')
+      response = connection.http_connection(EXAMPLE_SERVER, **)
+                           .get { |request| request.params['h'] = hostnames }
+      response.env.url.query
+    end
+
+    it 'should repeat the parameter name once per element in flat mode' do
+      expect(query_for(array_params: :flat)).to eq('h=host1&h=host2')
+    end
+
+    it 'should bracket the parameter name once per element in nested mode' do
+      expect(query_for(array_params: :nested)).to eq('h%5B%5D=host1&h%5B%5D=host2')
+    end
+
+    # The contrast case: without it, a mode that silently did nothing would still pass the above.
+    it 'should encode as nested when no mode is given' do
+      expect(query_for).to eq('h%5B%5D=host1&h%5B%5D=host2')
+      expect(query_for).not_to eq(query_for(array_params: :flat))
+    end
+
+    # Documented carve-out: the raw branch fixes the group's wire format, so :nested cannot bracket
+    # a group holding a raw value. Pinned here because `array_params:` now names :nested as a mode.
+    it 'should send an array holding a raw-marked value exploded even in nested mode' do
+      stub_request(:get, /#{Regexp.escape(EXAMPLE_SERVER)}/o).to_return(body: 'ok')
+      response = connection.http_connection(EXAMPLE_SERVER, array_params: :nested).get do |request|
+        request.params['h'] = [IPaaS::Job::Outbound::HTTP.raw_param_value('host1'), 'host2']
+      end
+      expect(response.env.url.query).to eq('h=host1&h=host2')
+    end
+
+    it 'should keep raw-marked values unescaped in flat mode' do
+      stub = stub_request(:get, "#{EXAMPLE_SERVER}?h=a%3Bb").to_return(body: 'ok')
+      connection.http_connection(EXAMPLE_SERVER, array_params: :flat).get do |request|
+        request.params['h'] = IPaaS::Job::Outbound::HTTP.raw_param_value('a%3Bb')
+      end
+      expect(stub).to have_been_requested.once
+    end
+
+    it 'should leave the timeouts alone when a mode is given' do
+      http_connection = connection.http_connection(EXAMPLE_SERVER, array_params: :flat)
+      expect(http_connection.options.open_timeout).to eq(5)
+      expect(http_connection.options.timeout).to eq(5 * 60)
+    end
+
+    it 'should reject a mode that is neither nested nor flat' do
+      expect do
+        connection.http_connection(EXAMPLE_SERVER, array_params: :exploded)
+      end.to raise_error(ArgumentError, 'array_params must be one of :nested, :flat, found :exploded.')
+    end
+
+    it 'should reject a string spelling of a supported mode' do
+      expect do
+        connection.http_connection(EXAMPLE_SERVER, array_params: 'flat')
+      end.to raise_error(ArgumentError, 'array_params must be one of :nested, :flat, found "flat".')
+    end
+
+    it 'should reject nil rather than fall back to the default' do
+      expect do
+        connection.http_connection(EXAMPLE_SERVER, array_params: nil)
+      end.to raise_error(ArgumentError, 'array_params must be one of :nested, :flat, found nil.')
+    end
+  end
+
   describe 'http_send' do
     it 'should call the http_connection method' do
       expect(connection).to receive(:http_connection).with(EXAMPLE_SERVER).and_return(double(get: 'response'))
@@ -332,8 +402,12 @@ describe IPaaS::Job::Outbound::HTTP do
     end
 
     it 'should leave a connector-chosen encoder in charge, marker or not' do
-      # An explicit choice beats the default install, so a connector that needs FlatParamsEncoder
+      # An explicit choice beats the default install, so a connector that assigns its own encoder
       # keeps it and forfeits raw pass-through rather than silently losing its own format.
+      # `array_params:` is the supported route; this pins today's behaviour for the connection an
+      # author still mutates.
+      # Once we use an allowlist for class usage and Faraday::FlatParamsEncoder is not on it this
+      # spec can be removed. We don't intend to support this going forward.
       stub = stub_request(:get, "#{EXAMPLE_SERVER}?d=a%253Bb").to_return(body: 'ok')
       conn = connection.http_connection(EXAMPLE_SERVER)
       conn.options[:params_encoder] = Faraday::FlatParamsEncoder

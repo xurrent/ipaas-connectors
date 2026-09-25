@@ -804,22 +804,29 @@ module AppOfferingBlueprintSpecs
             expect(stored_automation_rules).to eq(JSON.parse(yoda_automation_rules_blueprint))
           end
 
-          it 'should extract the app offering json when app offering has no scopes' do
-            app_offering_without_scopes = yoda_app_offering.deep_dup
-            app_offering_without_scopes.delete(:scopes)
+          {
+            'no scopes key' => ->(app_offering) { app_offering.delete(:scopes) },
+            'an empty scopes list' => ->(app_offering) { app_offering[:scopes] = [] },
+            'a null scopes value' => ->(app_offering) { app_offering[:scopes] = nil },
+          }.each do |description, strip_scopes|
+            it "should extract the app offering json when app offering has #{description}" do
+              app_offering_without_scopes = yoda_app_offering.deep_dup
+              strip_scopes.call(app_offering_without_scopes)
 
-            stub_request(:post, endpoint)
-              .with(body: graphql_request_body(find_app_offering_query,
-                                               variables: { reference: 'yoda', published: false },))
-              .to_return(body: { data: { appOfferings: { nodes: [app_offering_without_scopes] } } }.to_json)
+              stub_request(:post, endpoint)
+                .with(body: graphql_request_body(find_app_offering_query,
+                                                 variables: { reference: 'yoda', published: false },))
+                .to_return(body: { data: { appOfferings: { nodes: [app_offering_without_scopes] } } }.to_json)
 
-            stub_request(:get, 'https://cdn.pixabay.com/photo/2015/12/13/12/58/yoda-1091030_1280.jpg')
-              .to_return(body: 'fake_avatar_data', status: 200)
+              stub_request(:get, 'https://cdn.pixabay.com/photo/2015/12/13/12/58/yoda-1091030_1280.jpg')
+                .to_return(body: 'fake_avatar_data', status: 200)
 
-            expect { trigger.extract_blueprint }.not_to raise_error
+              expect { trigger.extract_blueprint }.not_to raise_error
 
-            stored_app_offering = JSON.parse(trigger.blueprint_store.read('app_offering.json'))
-            expect(stored_app_offering).not_to have_key('newScopes')
+              stored_app_offering = JSON.parse(trigger.blueprint_store.read('app_offering.json'))
+              expect(stored_app_offering).not_to have_key('scopes')
+              expect(stored_app_offering).not_to have_key('newScopes')
+            end
           end
 
           it 'should extract inline images from app offering attachments' do

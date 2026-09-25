@@ -16,6 +16,8 @@ module IPaaS
 
           def example_action
             @example_action ||= IPaaS::Connector::Action.new.tap do |action|
+              # Not the writer: it also copies the output schemas, which this placeholder must leave empty.
+              action.instance_variable_set(:@action_template, self)
               action.copy_schema_blocks_from(self, :input_schema)
               fixed_mapping = IPaaS::Connector::Mapping::FieldMapping.fixed_mapping(input_schema.example)
               action.input_mapping = fixed_mapping

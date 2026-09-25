@@ -14,7 +14,7 @@ module IPaaS
       VALID_BLUEPRINT_FILENAME = /\A[a-zA-Z0-9][a-zA-Z0-9_-]*(\.[a-zA-Z0-9]+)?\z/
       MAX_NR_OF_BLUEPRINT_FILES = 50
 
-      attr_accessor :connector
+      attr_reader :connector
 
       attribute :name, required: true, length: { in: 6..120 }
       attribute :avatar, format: { with: IPaaS::Connector::Types::AVATAR_REGEXP }
