@@ -99,11 +99,14 @@ A few things to notice:
 
 Connector code runs in a restricted Ruby environment. The runtime parses every `validate`, `parse`, `run`, `authenticate`, `config_tester`, and `helper` block and rejects code that does any of the following:
 
-- **No method definitions.** The sandbox rejects `def foo` and `def self.foo`. Use helpers (`helper :foo do … end`) for reusable logic.
+- **No method definitions.** The sandbox rejects `def foo`, `def self.foo`, `alias` and `undef`. Use helpers (`helper :foo do … end`) for reusable logic.
 - **No constant definitions.** The sandbox rejects `MY_CONST = …`. Inline the value, or compute it inside a helper.
 - **No global variables.** Reading `$something` raises.
 - **No subprocess execution.** The sandbox rejects backticks (`` `cmd` ``) and `%x{cmd}`.
 - **No arbitrary top-level constants.** A small allow-list opens up `JSON`, `YAML`, `URI`, `JWT`, `IO`, the standard Ruby value types, and a curated set of Rails and stdlib classes. Anything outside that list fails at load time.
+- **`.class` only gives the class name.** Use it in string interpolation (`"got #{value.class}"`), with `.to_s` or `.name`, or as the only argument to `log`. Comparing it, calling other methods on it, or handing it on is rejected; use `is_a?` to test a type.
+- **`to_json` takes no arguments.** Call it bare (`value.to_json`); passing options or a block is rejected, and so is `:to_json` as a symbol (`&:to_json`, `reduce(:to_json)`). Write `map { |v| v.to_json }` instead of `map(&:to_json)`.
+- **`solution` is only for its listed methods.** In blocks where it is available, `solution` may only be the receiver of `create_schedule!`, `soft_delete_schedule`, `runbooks`, `uuid`, or `name` (the last also as `solution.name` in a string). Storing it in a variable, returning it, passing it on, or calling anything else on it is rejected with `'solution' may only be used to call …`.
 - **Method allow-list.** Connector code can only call methods on the allow-list (`connector/lib/ipaas/connector/common/proc_rules/valid_methods_rule.rb`) and methods that iPaaS modules register via `proc_safe`. The list covers the `String`, `Integer`, `Hash`, `Array`, `Date`, `Time`, `URI`, `JSON`, and crypto methods you'll typically reach for; extend that file if you need one it's missing. For new helpers you write in `connector/lib/ipaas/job/…`, register them via `proc_safe` in the module that defines them, not in `valid_methods_rule.rb`.
 
 Because you can't define local methods, extracting logic into helpers is often the only way to keep a `run` block readable. That constraint shapes most of the conventions below.

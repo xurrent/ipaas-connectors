@@ -21,9 +21,10 @@ module IPaaS
         # raise from `method_missing`.
         OWN_METHODS = [:inspect, :to_s, :respond_to?].freeze
 
-        # Names no helper may take: the proxy's own, and the methods a proc may hand a class to —
-        # a helper under one of those would receive the class the constant rules let through.
-        RESERVED_NAMES = (OWN_METHODS + ProcRules::ValidConstantsRule::READ_METHODS).freeze
+        # Names no helper may take: the proxy's own, the methods a proc may hand a class to —
+        # a helper under one of those would receive the class the constant rules let through —
+        # and `class`, so `helpers.class` is never an exception to a rule on `.class`.
+        RESERVED_NAMES = (OWN_METHODS + ProcRules::ValidConstantsRule::READ_METHODS + [:class]).freeze
 
         def initialize(helpers)
           unless ::IPaaS::Connector::Common::Helpers === helpers # rubocop:disable Style/CaseEquality

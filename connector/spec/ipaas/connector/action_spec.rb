@@ -386,16 +386,20 @@ describe IPaaS::Connector::Action do
       runbook.actions = [action1, action2]
 
       expect { action1.reference = %(This isn't valid) }
-        .to raise_error(IPaaS::Error, %(Action reference cannot contain ', ", ♦ or \\: This isn't valid))
+        .to raise_error(described_class::InvalidReference,
+                        %(Action reference cannot contain ', ", ♦ or \\: This isn't valid))
 
       expect { action1.reference = %(This is not "valid") }
-        .to raise_error(IPaaS::Error, %(Action reference cannot contain ', ", ♦ or \\: This is not "valid"))
+        .to raise_error(described_class::InvalidReference,
+                        %(Action reference cannot contain ', ", ♦ or \\: This is not "valid"))
 
       expect { action1.reference = %(This is alm♦st valid) }
-        .to raise_error(IPaaS::Error, %(Action reference cannot contain ', ", ♦ or \\: This is alm♦st valid))
+        .to raise_error(described_class::InvalidReference,
+                        %(Action reference cannot contain ', ", ♦ or \\: This is alm♦st valid))
 
       expect { action1.reference = %(This is still \\not\\ valid) }
-        .to raise_error(IPaaS::Error, %(Action reference cannot contain ', ", ♦ or \\: This is still \\not\\ valid))
+        .to raise_error(described_class::InvalidReference,
+                        %(Action reference cannot contain ', ", ♦ or \\: This is still \\not\\ valid))
 
       expect { action1.reference = %(This is /fine/) }.not_to raise_error
       expect(action1.reference).to eq(%(This is /fine/))
@@ -406,7 +410,30 @@ describe IPaaS::Connector::Action do
       action2 = IPaaS::Connector::Action.parse(runbook, { name: 'action2', reference: 'action2' })
       runbook.actions = [action1, action2]
 
-      expect { action2.reference = 'action1' }.to raise_error(IPaaS::Error, 'Action reference is not unique: action1')
+      expect { action2.reference = 'action1' }
+        .to raise_error(described_class::InvalidReference, 'Action reference is not unique: action1')
+    end
+
+    it 'refuses a reference that is not text' do
+      action1 = IPaaS::Connector::Action.parse(runbook, { name: 'action1', reference: 'action1' })
+      runbook.actions = [action1]
+
+      expect { action1.reference = 123 }
+        .to raise_error(described_class::InvalidReference, 'Action reference must be text: 123')
+      expect(action1.reference).to eq('action1')
+    end
+
+    it 'keeps the successors linked when the new reference is blank and the old one stands' do
+      action1 = IPaaS::Connector::Action.parse(runbook, { name: 'action1', reference: 'action1' })
+      action2 = IPaaS::Connector::Action.parse(
+        runbook, { name: 'action2', reference: 'action2', predecessor_action_reference: 'action1' }
+      )
+      runbook.actions = [action1, action2]
+
+      action1.reference = ''
+
+      expect(action1.reference).to eq('action1')
+      expect(action2.predecessor_action_reference).to eq('action1')
     end
 
     it 'updates predecessor action references' do

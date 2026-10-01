@@ -84,7 +84,9 @@ class RubyConnector < IPaaS::Connector::Definition
       | Time | `Time.now`, `Time.current`, `Time.parse`, `utc`, `to_datetime`, `iso8601`, `zone`, `ago`, `at` |
       | XML | `text`, `at_xpath` |
 
-      Calling anything outside the allowlist (including `eval`, `system`, `exec`, `require`, `instance_eval`, method / constant definitions, direct instance / class / global variables) is rejected at validation time with `Method '<name>' not allowed.`.
+      Calling anything outside the allowlist (including `eval`, `system`, `exec`, `require`, `instance_eval`, method / constant definitions, direct instance / class / global variables) is rejected at validation time with `Method '<name>' not allowed.`. The `alias` and `undef` keywords are rejected with `'alias' not allowed.` / `'undef' not allowed.`.
+
+      `to_json` takes no arguments: call it bare (`value.to_json`). Passing options or a block, or `:to_json` as a symbol (`&:to_json`, `reduce(:to_json)`), is rejected with `'to_json' takes no arguments and cannot be passed as a symbol.`; write `map { |v| v.to_json }` instead of `map(&:to_json)`.
 
       #### Allowed classes
       A script may name only an approved class or module, matched by exact name (for example `Time`, `Date`, `JSON`, `URI`, `Base64`, `SecureRandom`, `Digest::SHA256`, `OpenSSL::HMAC`, `StandardError`, `ArgumentError`), and may call only the approved methods on each (`JSON.parse`, `Time.now`, `Base64.encode64`, …). A class may otherwise appear only where the construct consumes it: a `rescue` list, a `when` condition, a pattern match, or an argument to `raise`, `is_a?`, `kind_of?` or `instance_of?`. It may not be assigned to a variable, placed in a literal or passed to anything else. For the full authoritative list, see `connector/lib/ipaas/connector/common/proc_rules/valid_constants_rule.rb`.
@@ -252,7 +254,9 @@ class RubyConnector < IPaaS::Connector::Definition
         | Time | `Time.now`, `Time.current`, `Time.parse`, `utc`, `to_datetime`, `iso8601`, `zone`, `ago`, `at` |
         | XML | `text`, `at_xpath` |
 
-        Calling anything outside the allowlist (including `eval`, `system`, `exec`, `require`, `instance_eval`, method / constant definitions, direct instance / class / global variables) is rejected at validation time with `Method '<name>' not allowed.`.
+        Calling anything outside the allowlist (including `eval`, `system`, `exec`, `require`, `instance_eval`, method / constant definitions, direct instance / class / global variables) is rejected at validation time with `Method '<name>' not allowed.`. The `alias` and `undef` keywords are rejected with `'alias' not allowed.` / `'undef' not allowed.`.
+
+        `to_json` takes no arguments: call it bare (`value.to_json`). Passing options or a block, or `:to_json` as a symbol (`&:to_json`, `reduce(:to_json)`), is rejected with `'to_json' takes no arguments and cannot be passed as a symbol.`; write `map { |v| v.to_json }` instead of `map(&:to_json)`.
 
         #### Allowed classes
         A script may name only an approved class or module, matched by exact name (for example `Time`, `Date`, `JSON`, `URI`, `Base64`, `SecureRandom`, `Digest::SHA256`, `OpenSSL::HMAC`, `StandardError`, `ArgumentError`), and may call only the approved methods on each (`JSON.parse`, `Time.now`, `Base64.encode64`, …). A class may otherwise appear only where the construct consumes it: a `rescue` list, a `when` condition, a pattern match, or an argument to `raise`, `is_a?`, `kind_of?` or `instance_of?`. It may not be assigned to a variable, placed in a literal or passed to anything else. For the full authoritative list, see `connector/lib/ipaas/connector/common/proc_rules/valid_constants_rule.rb`.

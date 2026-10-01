@@ -14,6 +14,8 @@ Especially important to review and highlight are edits to:
   edit changes which helper names a connector may define
 - `ValidConstantsRule::PATTERN_NODES`
 - `REFLECTIVE_METHODS`
+- `ValidMethodsRule::SOLUTION_METHODS` — the only methods `solution` may be used to call
+- `ClassCallContext` — the positions a `.class` or `solution` value may take
 - `ProcHelper::TARGET_RUBY_VERSION`
 - `ProcHelper::MAX_SOURCE_BYTES` and `Connector::MAX_SOURCE_FILE_BYTES` — both refuse before
   any parse, and are what keeps iPaaS from having to process too large content
@@ -97,6 +99,18 @@ Two things an expression may name without a row, each judged by where the block 
 
 Registered in `BASIC_RULES`, and the only rule `NodeValidator` hands the block to (`node_validator_spec`
 pins both).
+
+## `.class` is for the class name only
+
+`.class` reaches the class of any value a proc holds, and no constant row governs what is then
+called on it, so it may only be used for the class's name. `ClassCallContext.permitted?` decides
+which positions qualify, and `ValidMethodsRule` refuses every other `.class` and `&:class`.
+
+## `solution` answers only its listed methods
+
+`solution` is off the allowlist and judged by position: accepted only as the receiver (or the
+stringified `name`) of a method in `SOLUTION_METHODS`, decided by `ValidMethodsRule.solution_call_permitted?`.
+A `&:solution` or reflective `:solution` is refused by name, the way `to_json` is.
 
 ## An assignment is judged as its explicit expansion
 

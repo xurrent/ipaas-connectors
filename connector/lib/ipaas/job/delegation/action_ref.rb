@@ -15,7 +15,7 @@ module IPaaS
           private
 
           def example_action
-            @example_action ||= IPaaS::Connector::Action.new.tap do |action|
+            IPaaS::Connector::Action.new.tap do |action|
               # Not the writer: it also copies the output schemas, which this placeholder must leave empty.
               action.instance_variable_set(:@action_template, self)
               action.copy_schema_blocks_from(self, :input_schema)
@@ -24,12 +24,16 @@ module IPaaS
               action.runbook = example_runbook(action)
             end
           end
-        end
 
-        def example_runbook(action)
-          IPaaS::Connector::Runbook.new(SecureRandom.uuid).tap do |runbook|
-            runbook.store_trigger_output(IPaaS::Connector::Types::HashType.example(nil))
-            runbook.actions = [action]
+          def example_runbook(action)
+            unregistered_runbook.tap do |runbook|
+              runbook.store_trigger_output(IPaaS::Connector::Types::HashType.example(nil))
+              runbook.actions = [action]
+            end
+          end
+
+          def unregistered_runbook
+            IPaaS::Connector::Runbook.uuid_scope({}) { IPaaS::Connector::Runbook.new(SecureRandom.uuid) }
           end
         end
       end

@@ -199,25 +199,34 @@ describe IPaaS::Connector::ActionTemplate do
       skip_function_capture_validation
     end
 
+    def running_action(action_template)
+      IPaaS::Connector::Action.new.tap do |action|
+        action.action_template = action_template
+        action.runbook = IPaaS::Connector::Runbook.new(SecureRandom.uuid)
+      end
+    end
+
     it 'can set job context identifier during run' do
-      action_template = IPaaS::Connector::ActionTemplate.new('uuid') do
+      action_template = spec_connector.action('uuid') do
         run do
           self.job_context_identifier = 'boo'
           'foo'
         end
       end
-      expect(action_template.run.call).to eq('foo')
-      expect(action_template.job_context_identifier).to eq('boo')
+      action = running_action(action_template)
+      expect(action_template.call_function(:run, action)).to eq('foo')
+      expect(action.job_context_identifier).to eq('boo')
     end
 
     it 'can retrieve job context identifier during run' do
-      action_template = IPaaS::Connector::ActionTemplate.new('uuid') do
+      action_template = spec_connector.action('uuid') do
         run do
           self.job_context_identifier
         end
       end
-      action_template.job_context_identifier = 'bar'
-      expect(action_template.run.call).to eq('bar')
+      action = running_action(action_template)
+      action.job_context_identifier = 'bar'
+      expect(action_template.call_function(:run, action)).to eq('bar')
     end
   end
 end

@@ -33,6 +33,18 @@ describe 'Assign Runbook Variable', :action do
       expect(action.input_schema.field(:value).required).to be_falsey
     end
 
+    it "retypes the value to the variable's type on its own input schema, leaving the template's as declared" do
+      declared_by_connector = action_template.input_schema.field(:value).type
+      expect(declared_by_connector).to eq(:any_value_type)
+      declared_by_variable = runbook.variable_field('my-int-var').type
+      expect(declared_by_variable).to eq(:integer)
+
+      result = action({ id: 'my-int-var', value: 42 })
+
+      expect(result.input_schema.field(:value).type).to eq(declared_by_variable)
+      expect(action_template.input_schema.field(:value).type).to eq(declared_by_connector)
+    end
+
     context 'after_update' do
       it 'should use the declared integer type' do
         input = { id: 'my-int-var', value: 42 }

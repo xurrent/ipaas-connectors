@@ -325,7 +325,6 @@ module IPaaS
             :request,
             :run,
             :runbooks,
-            :solution,
             :status,
             :template,
             :to_hash,
@@ -340,21 +339,72 @@ module IPaaS
           # another. The block-pass channel needs no list: validate_block_pass_symbols covers every method.
           REFLECTIVE_METHODS = Set[:reduce, :inject].freeze
 
+          CLASS_CALL_MESSAGE = "'.class' is only allowed to get the class name.".freeze
+
+          TO_JSON_MESSAGE = "'to_json' takes no arguments and cannot be passed as a symbol.".freeze
+
+          SOLUTION_METHODS = Set[:create_schedule!, :name, :runbooks, :soft_delete_schedule, :uuid].freeze
+          SOLUTION_CONTEXTS = [:receiver, :stringified].freeze
+          ASSIGNMENT_NODES = [:op_asgn, :or_asgn, :and_asgn].freeze
+          SOLUTION_CALL_MESSAGE = "'solution' may only be used to call #{SOLUTION_METHODS.sort.join(', ')}.".freeze
+
+          class << self
+            def solution_call_permitted?(node)
+              context, method_name, holder, through_block = ClassCallContext.of(node)
+              return false if through_block || !SOLUTION_CONTEXTS.include?(context)
+              return false unless SOLUTION_METHODS.include?(method_name)
+
+              !assignment_target?(holder)
+            end
+
+            # The first send off a receiverless `helpers`, with no arguments; its allowlist is skipped
+            # because the names are connector-defined. Shared with the proc_scan census.
+            def top_level_helper?(node)
+              node&.type == :send && node.children == [nil, :helpers]
+            end
+
+            private
+
+            def assignment_target?(holder)
+              parent = holder.parent
+              ASSIGNMENT_NODES.include?(parent&.type) && parent.children.first.equal?(holder)
+            end
+          end
+
+          attr_writer :on_class_call, :on_solution_call
+
           def initialize(...)
             super
             @reported_methods = []
             @reflective_reported = []
             @block_pass_reported = false
+            @class_call_reported = false
+            @to_json_reported = false
+            @solution_call_reported = false
           end
 
           def on_send(node)
             parent, method_name, *params = *node
 
+            notify_observers(node, method_name)
             validate_block_pass_symbols(params)
             validate_reflective_dispatch(node, method_name, params) if REFLECTIVE_METHODS.include?(method_name)
 
             # helpers.<anything> is accepted when called from the top level
             return if top_level_helper?(parent)
+
+            validate_named_call(node, method_name, params)
+          end
+
+          def notify_observers(node, method_name)
+            @on_class_call&.call(node) if method_name == :class
+            @on_solution_call&.call(node) if method_name == :solution
+          end
+
+          def validate_named_call(node, method_name, params)
+            validate_to_json_call(node, params) if method_name == :to_json
+            validate_class_call(node) if method_name == :class
+            return validate_solution_call(node) if method_name == :solution
 
             validate_method(method_name)
           end
@@ -392,11 +442,43 @@ module IPaaS
           private
 
           def validate_block_pass_symbols(params)
-            params.select { |param| param.type == :block_pass }.map { |n| n.children.first }.each do |child|
-              next validate_method(child.children.first) if child&.type == :sym
+            params.select { |param| param.type == :block_pass }.each { |block_pass| validate_block_pass(block_pass) }
+          end
 
-              report_unreadable_block_pass
+          def validate_block_pass(block_pass)
+            child = block_pass.children.first
+            return report_unreadable_block_pass unless child&.type == :sym
+
+            symbol = child.children.first
+            if symbol == :class
+              @on_class_call&.call(block_pass)
+              validate_class_call(block_pass)
             end
+            @on_solution_call&.call(block_pass) if symbol == :solution
+            validate_dispatched_method(symbol)
+          end
+
+          def validate_class_call(node)
+            return if @class_call_reported || ClassCallContext.permitted?(node)
+
+            @class_call_reported = true
+            on_invalid.call(CLASS_CALL_MESSAGE)
+          end
+
+          def validate_solution_call(node)
+            return if @solution_call_reported || self.class.solution_call_permitted?(node)
+
+            report_solution_dispatch
+          end
+
+          # Refuses `:solution` dispatched as a symbol (&:solution, reduce(:solution)) by name, so a
+          # future `proc_safe :solution` cannot reopen the record through the block-pass or reflective
+          # channel, the way to_json is refused.
+          def report_solution_dispatch
+            return if @solution_call_reported
+
+            @solution_call_reported = true
+            on_invalid.call(SOLUTION_CALL_MESSAGE)
           end
 
           def report_unreadable_block_pass
@@ -412,10 +494,15 @@ module IPaaS
             return report_reflective_dispatch(method_name) if splatted?(arguments)
 
             last_argument = arguments.last
-            return validate_method(last_argument.children.first) if last_argument.type == :sym
+            return validate_reflective_symbol(last_argument) if last_argument.type == :sym
             return if seed_form?(arguments, node, params)
 
             report_reflective_dispatch(method_name)
+          end
+
+          def validate_reflective_symbol(symbol_node)
+            @on_solution_call&.call(symbol_node) if symbol_node.children.first == :solution
+            validate_dispatched_method(symbol_node.children.first)
           end
 
           def splatted?(arguments)
@@ -428,6 +515,24 @@ module IPaaS
             arguments.one? && (node.block_node || params.any? { |param| param.type == :block_pass })
           end
 
+          def validate_dispatched_method(method_name)
+            return report_to_json if method_name == :to_json
+            return report_solution_dispatch if method_name == :solution
+
+            validate_method(method_name)
+          end
+
+          def validate_to_json_call(node, params)
+            report_to_json if params.any? || node.block_node
+          end
+
+          def report_to_json
+            return if @to_json_reported
+
+            @to_json_reported = true
+            on_invalid.call(TO_JSON_MESSAGE)
+          end
+
           def report_reflective_dispatch(method_name)
             return if @reflective_reported.include?(method_name)
 
@@ -436,7 +541,7 @@ module IPaaS
           end
 
           def top_level_helper?(parent)
-            parent&.type == :send && parent&.children == [nil, :helpers]
+            self.class.top_level_helper?(parent)
           end
         end
       end

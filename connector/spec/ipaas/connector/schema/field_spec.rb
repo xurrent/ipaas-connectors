@@ -747,6 +747,34 @@ describe IPaaS::Connector::Schema::Field do
   end
 
   describe 'example' do
+    it 'returns a copy of the default, so changing the example leaves the default intact' do
+      tags = described_class.new(id: :tags, label: 'Tags', type: :string, array: true, default: %w[a b])
+      example = tags.example
+      example.first << '-changed'
+
+      expect(example).to eq(%w[a-changed b])
+      expect(tags.default).to eq(%w[a b])
+    end
+
+    it 'returns a copy of the sample, so changing the example leaves the sample intact' do
+      tags = described_class.new(id: :tags, label: 'Tags', type: :string, array: true, sample: %w[a b])
+      example = tags.example
+      example.first << '-changed'
+
+      expect(example).to eq(%w[a-changed b])
+      expect(tags.sample).to eq(%w[a b])
+    end
+
+    it 'returns a copy of a recurrence sample, so changing the example leaves the sample intact' do
+      schedule = described_class.new(id: :schedule, label: 'Schedule', type: :recurrence,
+                                     sample: { frequency: 'daily' })
+      example = schedule.example
+      example[:frequency] = 'weekly'
+
+      expect(example[:frequency]).to eq('weekly')
+      expect(schedule.sample[:frequency]).to eq('daily')
+    end
+
     it 'should provide an example' do
       expect(field.example).to eq('Hello World!')
     end
@@ -876,6 +904,85 @@ describe IPaaS::Connector::Schema::Field do
         nested_field.fields = [nested_field]
         expect(nested_field.hash).not_to be_nil
       end
+    end
+  end
+
+  describe 'deep_dup' do
+    let(:original) do
+      described_class.new(id: :colour, label: 'Colour', type: :string, default: 'red', sample: 'crimson',
+                          enumeration: [{ id: 'red', label: 'Red' }])
+    end
+
+    it 'gives the copy an equal option list' do
+      expect(original.deep_dup.enumeration).to eq([{ id: 'red', label: 'Red' }])
+    end
+
+    it 'keeps absent containers absent' do
+      copy = described_class.new(id: :plain, label: 'Plain', type: :string).deep_dup
+
+      expect([copy.enumeration, copy.sample, copy.default]).to eq([nil, nil, nil])
+    end
+
+    it 'leaves the original option list untouched when the copy changes its own' do
+      copy = original.deep_dup
+      copy.enumeration << { id: 'blue', label: 'Blue' }
+      copy.enumeration.first[:label] << ' (dark)'
+
+      expect(copy.enumeration).to eq([{ id: 'red', label: 'Red (dark)' }, { id: 'blue', label: 'Blue' }])
+      expect(original.enumeration).to eq([{ id: 'red', label: 'Red' }])
+    end
+
+    it 'leaves the original default untouched when the copy changes its own' do
+      copy = original.deep_dup
+      copy.default << '-ish'
+
+      expect(copy.default).to eq('red-ish')
+      expect(original.default).to eq('red')
+    end
+
+    it 'leaves the original label untouched when the copy changes its own' do
+      copy = original.deep_dup
+      copy.label << ' (dark)'
+
+      expect(copy.label).to eq('Colour (dark)')
+      expect(original.label).to eq('Colour')
+    end
+
+    it 'leaves the original sample untouched when the copy changes its own' do
+      copy = original.deep_dup
+      copy.sample << '-ish'
+
+      expect(copy.sample).to eq('crimson-ish')
+      expect(original.sample).to eq('crimson')
+    end
+
+    it "copies a typed field's own subfields, not those its type provides" do
+      note = described_class.new(id: :note, label: 'Note', type: :string)
+      schedule = described_class.new(id: :schedule, label: 'Schedule', type: :recurrence).tap { |f| f.fields = [note] }
+      copy = schedule.deep_dup
+
+      expect(copy.fields_without_nested_schema.map(&:id)).to eq([:note])
+      expect(copy.fields_without_nested_schema.first).not_to equal(note)
+      expect(copy.to_h_ref).to eq(schedule.to_h_ref)
+    end
+
+    it 'gives a field named fields its own subfield list' do
+      filter = described_class.new(id: :fields, label: 'Fields filter', type: :string).tap { |f| f.fields = [] }
+      copy = filter.deep_dup
+      copy.fields_without_nested_schema << described_class.new(id: :planted, label: 'Planted', type: :string)
+
+      expect(copy.fields_without_nested_schema.map(&:id)).to eq([:planted])
+      expect(filter.fields_without_nested_schema).to eq([])
+    end
+
+    it 'leaves an Array default untouched, down to its elements, when the copy changes its own' do
+      tags = described_class.new(id: :tags, label: 'Tags', type: :string, array: true, default: %w[a b])
+      copy = tags.deep_dup
+      copy.default.first << '-changed'
+      copy.default << 'c'
+
+      expect(copy.default).to eq(%w[a-changed b c])
+      expect(tags.default).to eq(%w[a b])
     end
   end
 

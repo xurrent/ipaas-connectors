@@ -71,6 +71,7 @@ module IPaaS
         def log(message, interpolation = nil)
           message = interpolate(message, interpolation)
           logger.info(message)
+          nil
         end
 
         def discard_trigger_event!(message, interpolation = nil)
@@ -128,7 +129,13 @@ module IPaaS
         end
 
         def job_context_identifier_store
-          (trigger || action)&.runbook || (@test_store ||= TestJobContextStore.new)
+          (trigger || action)&.runbook || test_job_context_store
+        end
+
+        def test_job_context_store
+          return TestJobContextStore.new if is_a?(IPaaS::Connector::TriggerTemplate)
+
+          @test_job_context_store ||= TestJobContextStore.new
         end
       end
 

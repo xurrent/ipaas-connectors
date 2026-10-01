@@ -25,7 +25,7 @@ module IPaaS
           # @param array [Boolean] whether the schema is an array of schemas
           # @param default_fields [Proc] optional block to define default fields for the schema
           def self.schema(name, array: false, &default_fields)
-            raise IPaaS::Error, "#{name} already defined" if self.respond_to?(name)
+            raise IPaaS::Error, "#{name} already defined" if self.method_defined?(name)
 
             attribute(name,
                       type: array ? [IPaaS::Connector::Schema] : IPaaS::Connector::Schema,
@@ -75,7 +75,7 @@ module IPaaS
           # Add the fields attribute to the class.
           # It validates the fields to ensure they are correctly defined and handles various field attributes.
           def self.schema_fields
-            raise IPaaS::Error, 'fields already defined' if self.respond_to?(:fields)
+            raise IPaaS::Error, 'fields already defined' if self.method_defined?(:fields)
 
             attribute(:fields, type: [IPaaS::Connector::Schema::Field], default: [])
 

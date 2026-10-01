@@ -143,19 +143,17 @@ module IPaaS
         end
 
         def example
-          return sample unless sample.nil?
-          return default unless default.nil?
+          return sample.deep_dup unless sample.nil?
+          return default.deep_dup unless default.nil?
 
           result = type_def.example(self)
           array ? [result] : result
         end
 
-        # Attributes are assigned by reference, so scalars are private to the copy but container
-        # attributes (enumeration, sample, default) stay shared with the original.
         def deep_dup
           super.tap do |duped|
-            duped.attributes = attributes
-            duped.fields = fields.map(&:deep_dup) unless self.id == :fields # prevents stack level too deep
+            duped.attributes = attributes.except(:fields).deep_dup
+            duped.fields = fields_without_nested_schema.map(&:deep_dup)
           end
         end
 

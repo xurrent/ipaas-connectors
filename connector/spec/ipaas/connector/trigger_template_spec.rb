@@ -238,20 +238,28 @@ describe IPaaS::Connector::TriggerTemplate do
       skip_function_capture_validation
     end
 
+    def running_trigger(trigger_template)
+      IPaaS::Connector::Trigger.new.tap do |trigger|
+        trigger.trigger_template = trigger_template
+        trigger.runbook = IPaaS::Connector::Runbook.new(SecureRandom.uuid)
+      end
+    end
+
     it 'can set job context identifier during parse' do
-      trigger_template = IPaaS::Connector::TriggerTemplate.new('uuid') do
+      trigger_template = spec_connector.trigger('uuid') do
         name 'Test Template'
         parse do
           self.job_context_identifier = 'boo'
           'Hello World!'
         end
       end
-      expect(trigger_template.parse.call).to eq('Hello World!')
-      expect(trigger_template.job_context_identifier).to eq('boo')
+      trigger = running_trigger(trigger_template)
+      expect(trigger_template.call_function(:parse, trigger)).to eq('Hello World!')
+      expect(trigger.job_context_identifier).to eq('boo')
     end
 
     it 'can overwrite job context identifier during respond_with' do
-      trigger_template = IPaaS::Connector::TriggerTemplate.new('uuid') do
+      trigger_template = spec_connector.trigger('uuid') do
         name 'Test Template'
         parse do
           self.job_context_identifier = 'boo'
@@ -263,9 +271,10 @@ describe IPaaS::Connector::TriggerTemplate do
           result
         end
       end
-      expect(trigger_template.parse.call).to eq('Hello World!')
-      expect(trigger_template.respond_with.call).to eq('Hi boo')
-      expect(trigger_template.job_context_identifier).to eq('bar')
+      trigger = running_trigger(trigger_template)
+      expect(trigger_template.call_function(:parse, trigger)).to eq('Hello World!')
+      expect(trigger_template.call_function(:respond_with, trigger)).to eq('Hi boo')
+      expect(trigger.job_context_identifier).to eq('bar')
     end
   end
 end

@@ -28,6 +28,10 @@ describe IPaaS::Connector::Common::ProcHelper do
       'Please file a request if access is needed.'
   end
 
+  CLASS_CALL_MESSAGE = IPaaS::Connector::Common::ProcRules::ValidMethodsRule::CLASS_CALL_MESSAGE
+  TO_JSON_MESSAGE = IPaaS::Connector::Common::ProcRules::ValidMethodsRule::TO_JSON_MESSAGE
+  SOLUTION_CALL_MESSAGE = IPaaS::Connector::Common::ProcRules::ValidMethodsRule::SOLUTION_CALL_MESSAGE
+
   ROUTES = [
     {
       route: 'reflective dispatch: reduce turns a symbol argument into the dispatched method',
@@ -85,6 +89,90 @@ describe IPaaS::Connector::Common::ProcHelper do
         'params[:a].select(&:present?)',
         'params[:h].transform_values(&:to_s)',
         'params[:a].each_with_object({}) { |item, acc| acc }',
+      ],
+    },
+    {
+      route: 'to_json options: a call or a symbol dispatch that can hand options to to_json',
+      rejected: {
+        'params[:a].to_json(1)' => [TO_JSON_MESSAGE],
+        'params[:a].to_json(nil)' => [TO_JSON_MESSAGE],
+        'params[:a].to_json(methods: [:name])' => [TO_JSON_MESSAGE],
+        'params[:a].to_json({ methods: [:name] })' => [TO_JSON_MESSAGE],
+        'params[:a].to_json(*params[:b])' => [TO_JSON_MESSAGE],
+        'params[:a].to_json(**params[:b])' => [TO_JSON_MESSAGE],
+        'params[:a].to_json(&:to_s)' => [TO_JSON_MESSAGE],
+        'params[:a].to_json { |v| v }' => [TO_JSON_MESSAGE],
+        'params[:a].to_json { _1 }' => [TO_JSON_MESSAGE],
+        'params[:a].to_json { it }' => [TO_JSON_MESSAGE],
+        'params[:a]&.to_json(1)' => [TO_JSON_MESSAGE],
+        '{ a: params[:a] }.to_json(methods: [:name])' => [TO_JSON_MESSAGE],
+        '[params[:a], { methods: [:name] }].reduce(:to_json)' => [TO_JSON_MESSAGE],
+        '[{ methods: [:name] }].reduce(params[:a], :to_json)' => [TO_JSON_MESSAGE],
+        '[params[:a], { methods: [:name] }].reduce(:"to_json")' => [TO_JSON_MESSAGE],
+        '[params[:a], { methods: [:name] }].reduce(%s(to_json))' => [TO_JSON_MESSAGE],
+        '[params[:a], { methods: [:name] }].reduce(&:to_json)' => [TO_JSON_MESSAGE],
+        '[params[:a]].each_with_object({ methods: [:name] }, &:to_json)' => [TO_JSON_MESSAGE],
+        '[params[:a], params[:b]].sort(&:to_json)' => [TO_JSON_MESSAGE],
+        '[params[:a], params[:b]].min(&:to_json)' => [TO_JSON_MESSAGE],
+        '[params[:a], params[:b]].max(&:to_json)' => [TO_JSON_MESSAGE],
+        '[params[:a]].map(&:to_json)' => [TO_JSON_MESSAGE],
+        'lambda(&:to_json)' => [TO_JSON_MESSAGE],
+        'helpers.reduce(:to_json)' => [TO_JSON_MESSAGE],
+        'helpers.fmt(&:to_json)' => [TO_JSON_MESSAGE],
+      },
+      accepted: [
+        'params[:a].to_json',
+        'params[:a]&.to_json',
+        '{ a: params[:a] }.to_json',
+        '[params[:a]].map { |v| v.to_json }',
+        'JSON.pretty_generate(params[:a])',
+        'JSON[params[:a], { a: 1 }]',
+      ],
+    },
+    {
+      route: 'to_json options: inject shapes, refused by the method list too and so not proof of the to_json check',
+      rejected: {
+        '[params[:a], { methods: [:name] }].inject(:to_json)' => [TO_JSON_MESSAGE, "Method 'inject' not allowed."],
+        '[params[:a], { methods: [:name] }].inject(&:to_json)' => [TO_JSON_MESSAGE, "Method 'inject' not allowed."],
+      },
+      accepted: [
+        '[params[:a], params[:b]].reduce { |a, b| a.to_json }',
+      ],
+    },
+    {
+      route: 'solution is refused as the receiver of any method but its listed ones',
+      rejected: {
+        'solution.first' => [SOLUTION_CALL_MESSAGE],
+        'solution.keys' => [SOLUTION_CALL_MESSAGE],
+        'solution.to_a' => [SOLUTION_CALL_MESSAGE],
+        's = solution' => [SOLUTION_CALL_MESSAGE],
+        '[runbook].map(&:solution)' => [SOLUTION_CALL_MESSAGE],
+        '[runbook].reduce(nil, :solution)' => [SOLUTION_CALL_MESSAGE],
+      },
+      accepted: [
+        "solution&.name&.presence || 'iPaaS Integration'",
+        'solution.create_schedule!(runbook.uuid, {})',
+        "solution.soft_delete_schedule('ref')",
+        "solution.runbooks.detect { |r| r.name == 'x' }",
+        'runbook.solution.uuid',
+        '(solution).uuid',
+      ],
+    },
+    {
+      route: 'alias and undef re-point or remove a method, so an allowed name runs another',
+      rejected: {
+        "alias strip to_json\nstrip(methods: [:name])" => ["'alias' not allowed."],
+        'alias :strip :to_json' => ["'alias' not allowed."],
+        'class << params; alias m n; end' => ["'alias' not allowed."],
+        'undef to_json' => ["'undef' not allowed."],
+        'undef :strip, :to_json' => ["'undef' not allowed."],
+        "alias strip to_s\nundef to_json" => ["'alias' not allowed.", "'undef' not allowed."],
+      },
+      accepted: [
+        'params[:alias]',
+        '{ alias: 1, undef: 2 }',
+        '"alias strip to_json"',
+        'params[:a].strip',
       ],
     },
     {
@@ -269,7 +357,7 @@ describe IPaaS::Connector::Common::ProcHelper do
         'config.connector &&= 1' => ["Method 'connector=' not allowed."],
         'config.connector += 1' => ["Method 'connector=' not allowed."],
         'params[:a]&.connector ||= 1' => ["Method 'connector=' not allowed."],
-        'params[:a].solution ||= 1' => ["Method 'solution=' not allowed."],
+        'params[:a].solution ||= 1' => [SOLUTION_CALL_MESSAGE, "Method 'solution=' not allowed."],
         'params[:a].runbooks ||= 1' => ["Method 'runbooks=' not allowed."],
         'params[:a].validators ||= 1' => ["Method 'validators=' not allowed."],
       },
@@ -338,6 +426,25 @@ describe IPaaS::Connector::Common::ProcHelper do
         'begin; params.fetch(:a); rescue KeyError, IndexError; 2; end',
         'raise RuntimeError, "x"',
         'params[:a].is_a?(Float)',
+      ],
+    },
+    {
+      route: '.class reaches the class of any value, so only its name may be taken from it',
+      rejected: {
+        'self.class.present?' => [CLASS_CALL_MESSAGE],
+        'raise params.class' => [CLASS_CALL_MESSAGE],
+        '[1].map(&:class)' => [CLASS_CALL_MESSAGE],
+        '->(v) { v.class }' => [CLASS_CALL_MESSAGE],
+        'log(params.class, {})' => [CLASS_CALL_MESSAGE],
+        '"#{[params].map { |v| v.class }}"' => [CLASS_CALL_MESSAGE], # rubocop:disable Lint/InterpolationCheck
+      },
+      accepted: [
+        'self.class.name',
+        'raise params.class.name',
+        '[1].map { |v| v.class.name }',
+        'log(params.class)',
+        '"#{[params].map { |v| v.class.name }}"', # rubocop:disable Lint/InterpolationCheck
+        '->(v) { "#{v.class}" }', # rubocop:disable Lint/InterpolationCheck
       ],
     },
   ].freeze

@@ -5,6 +5,8 @@ module IPaaS
     # One is created by parsing a (JSON) hash where the `input_mapping` will be resolved
     # and used as the input for the action.
     class Action
+      class InvalidReference < IPaaS::Error; end
+
       extend IPaaS::Connector::Common::ProcRules::ProcSafe
 
       proc_safe :input, :nested, :iteration_state, :iteration_state_value, :iteration_state_value=,
@@ -226,15 +228,14 @@ module IPaaS
 
       def reference_with_update=(new_reference)
         reference_was = self.reference
-        self.reference_without_update = ensure_valid_reference(new_reference)
-        return if reference_was.blank?
+        resolved_reference = ensure_valid_reference(new_reference)
+        self.reference_without_update = resolved_reference
+        return if reference_was.blank? || resolved_reference == reference_was
 
-        runbook.actions.each do |action|
-          action.update_action_reference(reference_was, new_reference)
-        end
+        runbook.actions.each { |action| action.update_action_reference(reference_was, resolved_reference) }
 
         solution.test_cases_for(runbook.uuid)&.each do |test_case|
-          updated = test_case.update_action_reference(reference_was, new_reference)
+          updated = test_case.update_action_reference(reference_was, resolved_reference)
           test_case.save if updated
         end
       end
@@ -444,16 +445,25 @@ module IPaaS
 
       def ensure_valid_reference(new_reference)
         return new_reference if runbook.nil?
+
+        validate_reference(new_reference) unless new_reference.nil?
+
+        new_reference.presence || reference || self.class.generate_reference(runbook)
+      end
+
+      def validate_reference(new_reference)
+        unless new_reference.is_a?(String)
+          raise InvalidReference, "Action reference must be text: #{new_reference.inspect}"
+        end
+
         if new_reference.match?(REFERENCE_WITH_INVALID_CHARS)
-          raise IPaaS::Error,
+          raise InvalidReference,
                 "Action reference cannot contain ', \", #{EXCLUDED_REFERENCE_CHARACTER} or \\: #{new_reference}"
         end
 
-        reference_was = self.reference
-        exists = runbook.actions.map(&:reference).excluding(reference_was).include?(new_reference)
-        raise IPaaS::Error, "Action reference is not unique: #{new_reference}" if exists
+        return unless runbook.actions.map(&:reference).excluding(reference).include?(new_reference)
 
-        new_reference.presence || reference_was || self.class.generate_reference(runbook)
+        raise InvalidReference, "Action reference is not unique: #{new_reference}"
       end
 
       def map_output(output)

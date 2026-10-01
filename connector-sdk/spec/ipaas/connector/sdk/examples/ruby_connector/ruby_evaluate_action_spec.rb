@@ -20,6 +20,13 @@ describe 'Ruby Eval Action', :action do
       expect(action.input_schema.field(:input).required).to be_falsey
     end
 
+    it 'adds the input field to its own input schema, leaving the template schema without it' do
+      input = { input_schema: [{ id: 'i', label: 'Number', type: 'integer' }], proc: 'a = 1' }
+
+      expect(action(input).input_schema.field(:input)).not_to be_nil
+      expect(action_template.input_schema.fields.map(&:id)).not_to include(:input)
+    end
+
     it 'makes input required when there is a required field in the input schema' do
       input_schema = [
         { id: 'i', label: 'Number', type: 'integer', required: true },

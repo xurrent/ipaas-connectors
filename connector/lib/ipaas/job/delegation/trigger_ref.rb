@@ -16,7 +16,7 @@ module IPaaS
           private
 
           def example_trigger
-            @example_trigger ||= IPaaS::Connector::Trigger.new.tap do |trigger|
+            IPaaS::Connector::Trigger.new.tap do |trigger|
               # Not the writer: it also copies the output schemas, which this placeholder must leave empty.
               trigger.instance_variable_set(:@trigger_template, self)
               trigger.copy_schema_blocks_from(self, :config_schema)

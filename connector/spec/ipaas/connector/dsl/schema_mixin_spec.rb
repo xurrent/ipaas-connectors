@@ -93,6 +93,24 @@ describe IPaaS::Connector::Dsl::SchemaMixin do
     expect(foo_tester).to be_valid
   end
 
+  it 'refuses to define the same schema twice' do
+    expect do
+      Class.new(DslTester) do
+        schema :foo
+        schema :foo
+      end
+    end.to raise_error(IPaaS::Error, 'foo already defined')
+  end
+
+  it 'refuses to define the schema fields twice' do
+    expect do
+      Class.new(DslTester) do
+        schema_fields
+        schema_fields
+      end
+    end.to raise_error(IPaaS::Error, 'fields already defined')
+  end
+
   context 'schemas' do
     it 'allows to set schemas' do
       foo_tester = Class.new(DslTester) do

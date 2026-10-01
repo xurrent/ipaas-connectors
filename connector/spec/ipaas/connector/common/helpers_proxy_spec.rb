@@ -264,6 +264,13 @@ describe IPaaS::Connector::Common::HelpersProxy do
       expect { helpers.for_proc.raise(Time) }.to raise_error(NoMethodError, "Missing helper method 'raise'.")
     end
 
+    it 'is refused under class, so helpers.class never reaches an author block' do
+      helpers = IPaaS::Connector::Common::Helpers.new
+
+      expect { helpers.define_helper(:class) { 1 } }
+        .to raise_error(ArgumentError, "Helper 'class' is reserved; choose another name.")
+    end
+
     it 'allows a name the proxy does not answer' do
       helpers = IPaaS::Connector::Common::Helpers.new
 

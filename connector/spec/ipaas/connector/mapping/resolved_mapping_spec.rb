@@ -121,6 +121,27 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
       expect(resolved[:boo]).to eq 'Boohoo'
     end
 
+    it 'gives each resolution its own copy of a default, so changing one leaves the field default intact' do
+      example_schema.field :boo, 'Boo', :string, default: 'Boohoo'
+      first = resolve([{ field_id: :foo, fixed: 'Fixed Foo' }])
+      first[:boo] << ' mutated'
+
+      expect(first[:boo]).to eq 'Boohoo mutated'
+      expect(example_schema.field(:boo).default).to eq 'Boohoo'
+      expect(resolve([{ field_id: :foo, fixed: 'Fixed Foo' }])[:boo]).to eq 'Boohoo'
+    end
+
+    it 'gives each resolution its own copy of an Array default, down to its elements' do
+      example_schema.field :tags, 'Tags', :string, array: true, default: %w[a b]
+      first = resolve([])
+      first[:tags].first << '-changed'
+      first[:tags] << 'c'
+
+      expect(first[:tags]).to eq %w[a-changed b c]
+      expect(example_schema.field(:tags).default).to eq %w[a b]
+      expect(resolve([])[:tags]).to eq %w[a b]
+    end
+
     it 'should not set the default value for mapped fields' do
       example_schema.field :boo, 'Boo', :string, default: 'Boohoo'
       resolved = resolve([{ field_id: :boo, fixed: nil }])
@@ -169,6 +190,21 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
         error_message = "Nested field 'schedule' invalid: Field 'time_of_day' is invalid."
         expect(resolved.full_error_messages).to eq(error_message)
         expect(resolved.mapping.first.errors[:base]).to include(error_message)
+      end
+
+      it 'gives each resolution its own copy of an unmapped recurrence default' do
+        schema = IPaaS::Connector::Schema.new('recurrence') do
+          field :foo, 'Foo', :string
+          field :schedule, 'Schedule', :recurrence, default: { frequency: 'daily' }
+        end
+        first = resolve([{ field_id: :foo, fixed: 'Fixed Foo' }], schema: schema)
+        first[:schedule][:frequency] = 'weekly'
+        second = resolve([{ field_id: :foo, fixed: 'Fixed Foo' }], schema: schema)
+
+        expect(first[:schedule][:frequency]).to eq('weekly')
+        expect(schema.field(:schedule).default[:frequency]).to eq('daily')
+        expect(second[:schedule][:frequency]).to eq('daily')
+        expect(second).to be_valid
       end
     end
   end

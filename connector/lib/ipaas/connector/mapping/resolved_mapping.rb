@@ -56,6 +56,10 @@ module IPaaS
           to_hash
         end
 
+        def dup
+          to_hash
+        end
+
         def to_json(*_args)
           JSON.generate(to_hash)
         end
@@ -134,7 +138,7 @@ module IPaaS
 
         def resolve_default_fields
           fields.select(&:default).reject(&:disabled).each do |default_field|
-            self[default_field.id] = default_field.default unless self.key?(default_field.id)
+            self[default_field.id] = default_field.default.deep_dup unless self.key?(default_field.id)
           end
         end
 

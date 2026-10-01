@@ -32,6 +32,12 @@ describe IPaaS::Job::Context do
       expect_any_instance_of(Logger).to receive(:info).with('foo bie')
       context.log('foo %<bar>s', { bar: 'bie' }.with_indifferent_access)
     end
+
+    it 'returns nothing of what the logger returns' do
+      context.logger = instance_double(Logger, info: Object.new)
+
+      expect(context.log('foo')).to be_nil
+    end
   end
 
   describe 'log routing precedence' do
