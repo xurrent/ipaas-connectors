@@ -173,6 +173,7 @@ module IPaaS
             if result.nil? && pending_schema_generation?(name)
               result = generate_schemas_from_blocks(name, default_fields, array: false)
             end
+            # Built per call and never stored, so even a sealed template hands each caller a schema of its own.
             result || IPaaS::Connector::Schema.new(reference || SecureRandom.uuid_v7).tap do |s|
               _regenerate_schema(name, s, s.reference, default_fields) if default_fields
             end

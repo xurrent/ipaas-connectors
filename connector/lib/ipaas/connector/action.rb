@@ -17,6 +17,8 @@ module IPaaS
 
       EXCLUDED_REFERENCE_CHARACTER = '♦'.freeze
       REFERENCE_WITH_INVALID_CHARS = /['"#{EXCLUDED_REFERENCE_CHARACTER}\\]/
+      LOGGED_OUTPUT_NESTING = 3
+      ITERATION_STATE_NESTING = 2
 
       attr_accessor :runbook
       delegate :version, :solution, :trigger_output, :action_output, to: :runbook
@@ -342,7 +344,7 @@ module IPaaS
 
         previous_count = iteration_count
         fixed_mapping = IPaaS::Connector::Mapping::FieldMapping.fixed_mapping(raw_output)
-        resolved_mapping = iteration_state_schema.resolve(self, fixed_mapping)
+        resolved_mapping = iteration_state_schema.resolve(self, fixed_mapping, nesting: ITERATION_STATE_NESTING)
         runbook.store_action_iteration_state(reference, { count: previous_count + 1, value: resolved_mapping.to_hash })
         resolved_mapping
       end
@@ -474,7 +476,7 @@ module IPaaS
         raw_output = hash_with_encrypted_secrets(output[:output], output_schema)
 
         fixed_mapping = IPaaS::Connector::Mapping::FieldMapping.fixed_mapping(raw_output)
-        mapped_output = output_schema.resolve(self, fixed_mapping)
+        mapped_output = output_schema.resolve(self, fixed_mapping, nesting: LOGGED_OUTPUT_NESTING)
         [reference, mapped_output]
       end
 

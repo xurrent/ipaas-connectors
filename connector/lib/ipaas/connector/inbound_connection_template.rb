@@ -4,6 +4,7 @@ module IPaaS
     class InboundConnectionTemplate
       include IPaaS::Connector::Common::Model
       include IPaaS::Connector::Dsl::HelpersMixin
+      include IPaaS::Connector::Common::Sealing::Member
 
       attr_reader :connector
 

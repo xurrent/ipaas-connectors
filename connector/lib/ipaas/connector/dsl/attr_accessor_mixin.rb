@@ -41,21 +41,17 @@ module IPaaS
         extend ActiveSupport::Concern
 
         included do
+          class_attribute :default_blocks, instance_accessor: false, default: {}
+
           def self.attr_accessor(*keys, &block)
             # pass all keys to the original `attr_accessor` mixin
             result = super(*keys)
+            self.default_blocks = default_blocks.merge(keys.index_with { block })
             keys.each do |key|
               # override the getter method to accept a value `t.foo 'My Foo'`
               define_method(key) do |value = UNDEFINED|
                 if value == UNDEFINED
-                  # no value provided, retrieve the current value
-                  ivar = :"@#{key}"
-                  unless instance_variable_defined?(ivar)
-                    # first time so generate a default value or fallback to `nil`
-                    resolved_default_value = block ? self.instance_exec(&block) : nil
-                    instance_variable_set(ivar, resolved_default_value)
-                  end
-                  instance_variable_get(ivar)
+                  stored_or_default(key)
                 else
                   # when a value is given, call the setter method from the original `attr_accessor` mixin
                   self.send(:"#{key}=", value)
@@ -64,6 +60,24 @@ module IPaaS
             end
             result
           end
+        end
+
+        # Reading an unset accessor stores its default, a write a sealed object cannot take, so sealing
+        # stores them all first.
+        def store_defaults
+          self.class.default_blocks.each_key { |key| stored_or_default(key) }
+        end
+
+        private
+
+        def stored_or_default(key)
+          ivar = :"@#{key}"
+          unless instance_variable_defined?(ivar)
+            # first time so generate a default value or fallback to `nil`
+            block = self.class.default_blocks[key]
+            instance_variable_set(ivar, block ? self.instance_exec(&block) : nil)
+          end
+          instance_variable_get(ivar)
         end
       end
     end

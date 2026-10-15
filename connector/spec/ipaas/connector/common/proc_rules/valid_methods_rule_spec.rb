@@ -49,6 +49,7 @@ describe IPaaS::Connector::Common::ProcRules::ValidMethodsRule do
     :finish_job!,
     :backoff_if_needed,
     :parse_json_response,
+    :parse_json_object_or_empty,
     :parse_csv,
     :psa_validate_secret,
     :psa_extract_basic_auth,

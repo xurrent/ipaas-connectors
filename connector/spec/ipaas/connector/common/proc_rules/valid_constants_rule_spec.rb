@@ -224,6 +224,8 @@ describe IPaaS::Connector::Common::ProcRules::ValidConstantsRule do
       'OpenSSL::Digest' => 'OpenSSL::Digest',
       'IPaaS::Job' => 'IPaaS::Job',
       'IPaaS::Job::GraphQL::Schema::Nope' => 'IPaaS::Job::GraphQL::Schema::Nope',
+      'IPaaS::Connector::Authentication::Outbound::BasicAuth.helper(:x)' =>
+        'IPaaS::Connector::Authentication::Outbound::BasicAuth',
       'Float::INFINITY' => 'Float::INFINITY',
       'x = [Float::INFINITY]' => 'Float::INFINITY',
       'defined?(ENV)' => 'ENV',

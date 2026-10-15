@@ -6,6 +6,7 @@ module IPaaS
       proc_safe :includes, :after_update, :first_after_update_pass?
 
       include IPaaS::Connector::Common::Model
+      include IPaaS::Connector::Common::Sealing::Member
 
       # Each pass reveals one more level of the fields an after_update derives from its values,
       # and one further pass has to observe that nothing changed. GraphQL selections, the deepest
@@ -44,14 +45,16 @@ module IPaaS
         end.to_h
       end
 
-      def resolve(context, field_mapping, &block)
+      def resolve(context, field_mapping, nesting: 1, &block)
         # A schema marked shared is a process-global singleton (RecurrenceType): its after_update
         # mutates fields in place and validation reads those flags live, so concurrent requests
         # would contaminate each other. Resolve on a private copy to keep the template read-only.
         # #80388755.
-        return deep_dup.tap { |copy| copy.shared = false }.resolve(context, field_mapping, &block) if shared?
+        if shared?
+          return deep_dup.tap { |copy| copy.shared = false }.resolve(context, field_mapping, nesting: nesting, &block)
+        end
 
-        using_context(context) { resolve_within_context(context, field_mapping, &block) }
+        using_context(context) { resolve_within_context(context, field_mapping, nesting, &block) }
       end
 
       def shared?
@@ -106,11 +109,11 @@ module IPaaS
 
       private
 
-      def resolve_within_context(context, field_mapping, &block)
+      def resolve_within_context(context, field_mapping, nesting, &block)
         was_resolving = @resolving
         @resolving = true
         begin
-          values = resolved_mapping(context, field_mapping)
+          values = resolved_mapping(context, field_mapping, nesting)
           safe_resolve(context, field_mapping, values, was_resolving, &block)
         ensure
           @resolving = was_resolving
@@ -128,7 +131,7 @@ module IPaaS
           self.fields = new_fields if new_fields.is_a?(Array) && new_fields.all?(Field)
 
           # resolve again, fields may be updated
-          resolved_mapping(context, field_mapping).resolve
+          resolved_mapping(context, field_mapping, values.nesting).resolve
         end
       end
 
@@ -138,8 +141,8 @@ module IPaaS
         IPaaS::Connector::Common::ProcHelper.new(context, after_update, on_invalid: on_invalid, connector: connector)
       end
 
-      def resolved_mapping(context, field_mapping)
-        IPaaS::Connector::Mapping::ResolvedMapping.new(context, self.fields, field_mapping)
+      def resolved_mapping(context, field_mapping, nesting)
+        IPaaS::Connector::Mapping::ResolvedMapping.new(context, self.fields, field_mapping, nesting: nesting)
       end
 
       def safe_resolve(context, field_mapping, values, was_resolving, &block)

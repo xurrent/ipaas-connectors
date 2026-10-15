@@ -25,6 +25,9 @@ module IPaaS
       include IPaaS::Connector::Common::Model
       include IPaaS::Connector::Common::UuidMixin
       include IPaaS::Connector::Dsl::HelpersMixin
+      include IPaaS::Connector::Common::Sealing::Member
+
+      stays_writable :@proc_validations
 
       cattr_accessor :proc_validations_factory, instance_accessor: false do
         -> { Set.new }
@@ -52,6 +55,8 @@ module IPaaS
 
       def inbound_connection(&block)
         return @inbound_connection unless block
+
+        refuse_once_sealed('An inbound connection')
         raise IPaaS::Error, 'Duplicate inbound connection.' if instance_variable_defined?(:@inbound_connection)
 
         IPaaS::Connector::InboundConnectionTemplate.new.tap do |inbound|
@@ -64,6 +69,8 @@ module IPaaS
 
       def outbound_connection(&block)
         return @outbound_connection unless block
+
+        refuse_once_sealed('An outbound connection')
         raise IPaaS::Error, 'Duplicate outbound connection.' if instance_variable_defined?(:@outbound_connection)
 
         IPaaS::Connector::OutboundConnectionTemplate.new.tap do |outbound|
@@ -75,11 +82,9 @@ module IPaaS
       end
 
       def trigger(uuid = nil, &block)
-        unless block
-          return triggers.first if uuid.blank?
-          return triggers.detect { |template| template.uuid == uuid }
-        end
+        return triggers.detect { |template| uuid.blank? || template.uuid == uuid } unless block
 
+        refuse_once_sealed('A trigger', triggers)
         IPaaS::Connector::TriggerTemplate.new(uuid).tap do |t|
           owned_by(t, self)
           triggers << t
@@ -91,6 +96,7 @@ module IPaaS
       def action(uuid = nil, &block)
         return actions.detect { |template| template.uuid == uuid } unless block
 
+        refuse_once_sealed('An action', actions)
         IPaaS::Connector::ActionTemplate.new(uuid).tap do |a|
           owned_by(a, self)
           actions << a
@@ -103,12 +109,15 @@ module IPaaS
         helpers_definition.define_helper(name, &block)
       end
 
-      # Every registry this connector owns, sealed before any solution code can run.
-      # Read through the accessor, not the ivar: an unmade registry would stay writable.
-      def seal_helpers!
-        [self, inbound_connection, outbound_connection, *triggers, *actions].compact.each do |owner|
-          owner.helpers_definition.freeze
-        end
+      # This connector and everything it is made of, sealed before any solution code can run.
+      def seal!
+        IPaaS::Connector::Common::Sealing.seal!(self)
+      end
+
+      def warm_for_seal
+        super
+        # A connector with no block at all never fills proc_validations.
+        proc_validations
       end
 
       # No need to lock, a race condition only costs a few extra validations.
@@ -139,6 +148,12 @@ module IPaaS
       end
 
       private
+
+      # A template registers itself by uuid as it is built, so a refusal by the frozen list would come too late:
+      # the rogue template would still resolve by uuid. The list is what a copy of the connector still shares.
+      def refuse_once_sealed(what, registry = self)
+        raise FrozenError, "#{what} cannot be defined; this connector is sealed." if registry.frozen?
+      end
 
       def inbound_connection_valid?
         return unless inbound_connection

@@ -24,6 +24,7 @@ module IPaaS
 
         include IPaaS::Connector::Common::Model
         include ActiveModel::Validations::Callbacks
+        include IPaaS::Connector::Common::Sealing::Member
 
         attr_reader :connector
 
@@ -105,6 +106,13 @@ module IPaaS
         def type=(value)
           @type_def = nil
           @type = value
+        end
+
+        def warm_for_seal
+          super
+          # Validation never fills type_def on a field held as another's default or sample, nor on one sealed
+          # unvalidated.
+          type_def
         end
 
         def type_def

@@ -32,7 +32,7 @@ Gem::Specification.new do |s|
   s.add_dependency 'method_source', '>= 1.1.0'
   s.add_dependency 'nokogiri', '>= 1.16.0'
   s.add_dependency 'rack', '>= 3.0.0'
-  s.add_dependency 'rubocop-ast', '>= 0.1.0'
+  s.add_dependency 'rubocop-ast', '>= 1.50.0'
   s.add_dependency 'tzinfo-data', '>= 1.2025.0'
 
   s.metadata['rubygems_mfa_required'] = 'true'

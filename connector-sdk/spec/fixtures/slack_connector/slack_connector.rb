@@ -17,16 +17,16 @@ class SlackConnector < IPaaS::Connector::Definition
 
       To use this connector, you need:
       * A Slack workspace with a Slack App configured
-      * A Bot token (`xoxb-...`) with the required OAuth scopes
+      * A Slack bot token (`xoxb-...`) with the required OAuth scopes
       * A Signing Secret (from your Slack App's Basic Info page) for webhook verification
 
       # Authentication
 
       ## Outbound (API calls)
 
-      Uses Bearer token authentication with a Slack Bot token. Configure the outbound
-      connection with:
-      * **Bearer token**: Your Slack Bot token (`xoxb-...`)
+      Sends your Slack bot token as a Bearer token on every Slack Web API call.
+      Configure the outbound connection with:
+      * **Slack bot token** (required): the Bot User OAuth Token of your Slack app (`xoxb-...`)
 
       Required OAuth scopes depend on the actions used:
 
@@ -81,7 +81,22 @@ class SlackConnector < IPaaS::Connector::Definition
     end
 
     outbound_connection do
-      bearer_authenticator
+      config_schema do
+        field :bearer, 'Slack bot token', :nested,
+              required: true,
+              hint: 'The Bot User OAuth Token of your Slack app, from its OAuth & Permissions page.' do
+          field :bearer_token, 'Bot token', :secret_string,
+                required: true,
+                hint: 'Usually starts with xoxb-.'
+        end
+      end
+
+      authenticate do |request|
+        bearer = config[:bearer]
+        next if bearer.blank?
+
+        request.headers['Authorization'] = "Bearer #{decrypt_secret_string(bearer[:bearer_token]).strip}"
+      end
     end
 
     # ──────────────────────────────────────────────

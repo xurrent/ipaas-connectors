@@ -1283,4 +1283,37 @@ describe IPaaS::Connector::Common::ProcHelper do
       end
     end
   end
+
+  describe 'a write the seal refuses' do
+    let(:schema) do
+      IPaaS::Connector::Schema.new('sealed') { field :plain, 'Plain', :string }.tap do |sealed|
+        IPaaS::Connector::Common::Sealing.seal!(sealed)
+      end
+    end
+
+    def refusal(source)
+      described_class.new(schema, source).execute
+    rescue FrozenError => e
+      e
+    end
+
+    it 'reaches the author named by class, without the inspect Ruby builds the message from' do
+      error = refusal("field(:evil, 'Evil', :string)")
+
+      expect(error.message).to eq("can't modify frozen Array")
+      expect(error.cause).to be_nil
+      expect(schema.fields.map(&:id)).to eq([:plain])
+    end
+
+    it 'says why when what it refused is part of a connector' do
+      expect(refusal("field(:plain).label = 'Renamed'").message)
+        .to eq("can't modify frozen IPaaS::Connector::Schema::Field; it is shared by every solution on the connector")
+      expect(schema.field(:plain).label).to eq('Plain')
+    end
+
+    # Contrast case for the above: the same write outside an authored proc keeps Ruby's own message.
+    it 'leaves a refusal outside an authored proc as Ruby raised it' do
+      expect { schema.fields << :evil }.to raise_error(FrozenError, /Field \(plain\)/)
+    end
+  end
 end

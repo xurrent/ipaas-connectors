@@ -34,8 +34,17 @@ module IPaaS
 
         value.each do |key, v|
           field = schema.field(key)
-          value[key] = field_with_encrypted_secrets(v, field) if field
+          next unless field
+
+          encrypted = field_with_encrypted_secrets(v, field)
+          store_unconverted(value, key, encrypted) unless encrypted.equal?(v)
         end
+      end
+
+      def store_unconverted(hash, key, value)
+        return hash.regular_writer(key, value) if hash.is_a?(ActiveSupport::HashWithIndifferentAccess)
+
+        hash[key] = value
       end
 
       def encryptor

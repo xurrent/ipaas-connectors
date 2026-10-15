@@ -70,6 +70,32 @@ describe IPaaS::Encryption::IntermediateKeyProvider do
     expect { provider.decryption_key(key.identifier) }.to raise_error(IPaaS::Encryption::Errors::Decryption)
   end
 
+  context 'with a decryption key cached by a provider and a store without that key' do
+    let(:other_store) { ActiveSupport::Cache::MemoryStore.new }
+    let(:other_system_id) { 'a1f0c6de-5b2e-4f43-9d7a-3c8e2b6f1d90' }
+    let(:key) { provider.encryption_key }
+
+    before { provider.decryption_key(key.identifier) }
+
+    it 'provides the cached decryption key to a provider of the same system' do
+      same_system_provider = provider_for(other_store, system_id)
+
+      expect(same_system_provider.decryption_key(key.identifier).identifier).to eq(key.identifier)
+    end
+
+    it 'does not provide the cached decryption key to a provider of another system' do
+      other_system_provider = provider_for(other_store, other_system_id)
+
+      expect { other_system_provider.decryption_key(key.identifier) }
+        .to raise_error(IPaaS::Encryption::Errors::Decryption, 'Key permanently revoked')
+    end
+
+    def provider_for(store, system_id)
+      system_key_provider = IPaaS::Encryption::SystemKeyProvider.new(store, kms, system_id, kms_key_arn)
+      IPaaS::Encryption::IntermediateKeyProvider.new(store, system_key_provider)
+    end
+  end
+
   def decrypt(key)
     sk = system_key_provider.decryption_key(key.parent_key_identifier)
     IPaaS::Encryption::Cipher.new(sk.secret).decrypt(key.encrypted_key)

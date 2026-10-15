@@ -10,12 +10,12 @@ This guide covers how the files fit together, the constraints the runtime puts o
 
 A connector typically owns four files:
 
-| File | Purpose |
-|---|---|
-| `connector-sdk/spec/fixtures/<name>_connector.rb` | The connector definition: the source of truth. The SDK loads it; the specs exercise it. |
-| `connector-sdk/spec/ipaas/connector/sdk/examples/<name>_connector/<thing>_spec.rb` | One spec per trigger, action, or connection. |
-| `connector-sdk/spec/support/shared_contexts/<name>_context.rb` | Shared `let` blocks (connector id, outbound config, base URL) used by every spec for this connector. |
-| `connector-sdk/spec/support/shared_examples/<name>_error_examples.rb` | Reusable rate-limit and 5xx error examples. Optional, but worth adding once you have more than one action. |
+| File                                                                               | Purpose                                                                                                    |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `connector-sdk/spec/fixtures/<name>_connector.rb`                                  | The connector definition: the source of truth. The SDK loads it; the specs exercise it.                    |
+| `connector-sdk/spec/ipaas/connector/sdk/examples/<name>_connector/<thing>_spec.rb` | One spec per trigger, action, or connection.                                                               |
+| `connector-sdk/spec/support/shared_contexts/<name>_context.rb`                     | Shared `let` blocks (connector id, outbound config, base URL) used by every spec for this connector.       |
+| `connector-sdk/spec/support/shared_examples/<name>_error_examples.rb`              | Reusable rate-limit and 5xx error examples. Optional, but worth adding once you have more than one action. |
 
 UUIDs (for the connector itself, every trigger, every action) must be stable v7 UUIDs. Generate them once with `SecureRandom.uuid_v7` and leave them alone; they are the wire-level identity of the templates.
 
@@ -194,7 +194,7 @@ A few rules new authors trip on:
 ## Things to keep in mind
 
 - **Schemas drive the UI.** Every `field` in `input_schema` or `output_schema` shows up in the runbook editor. `hint`, `visibility`, and `required` shape what the runbook author sees and what they can change. `virima_connector.rb` and `xurrent_app_connector.rb` exercise the DSL most fully.
-- **The `description` markdown reaches runbook authors.** Treat it as product documentation, not as a code comment. The standard layout: *Overview*, *Prerequisites*, *Authentication*, *Triggers*, and *Actions* with input/output tables.
+- **The `description` markdown reaches runbook authors.** Treat it as product documentation, not as a code comment. The standard layout: _Overview_, _Prerequisites_, _Authentication_, _Triggers_, and _Actions_ with input/output tables.
 - **`make_secret_string` in specs.** A `:secret_string` field comes back as an opaque object in production. `make_secret_string('value')` gives your tests the same wrapper, so code that reads the value behaves the same way under test.
 - **Avatars.** For a private connector in your own fork, set `avatar` to any URL or asset path the runtime can resolve. For a PR contributing a new public connector, include the SVG with the PR (see [CONTRIBUTING.md](./CONTRIBUTING.md)) and reference it as `/assets/icons/<connector_name>.svg`. The platform team wires the asset in when the change is replayed internally.
 

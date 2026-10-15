@@ -34,7 +34,7 @@ module IPaaS
       end
 
       def decryption_key(id)
-        self.class.memcache.fetch(id, expires_in: REVOKED_CHECK_INTERVAL) do
+        self.class.memcache.fetch(id, namespace: system_id, expires_in: REVOKED_CHECK_INTERVAL) do
           key = StoredCryptoKey.load(store, id)
 
           raise Errors::Decryption, 'Key permanently revoked' if key.nil?
@@ -51,7 +51,7 @@ module IPaaS
 
         key.revoked_at = Time.now.utc
         StoredCryptoKey.save(store, key)
-        self.class.memcache.delete(id)
+        self.class.memcache.delete(id, namespace: system_id)
       end
 
       def partition

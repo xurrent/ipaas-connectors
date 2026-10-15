@@ -21,8 +21,9 @@ module IPaaS
             end
             return unless value.is_a?(Hash)
 
-            value[:type] = value[:type].to_sym if symbolizable?(value[:type])
-            value[:id] = value[:id].to_sym if symbolizable?(value[:id])
+            # Merged rather than assigned: the Hash may be a sealed template's own default or sample.
+            value = value.merge(type: value[:type].to_sym) if symbolizable?(value[:type])
+            value = value.merge(id: value[:id].to_sym) if symbolizable?(value[:id])
             fields = value[:fields]
             IPaaS::Connector::Schema::Field.new.tap do |schema_field|
               valid_attributes = value.except(:fields).select do |attr_name, _attr_value|
@@ -151,7 +152,9 @@ module IPaaS
 
                 fields
               end
-            end
+              # Nothing resolves this schema, since `resolve` is overridden above; were that override removed,
+              # its after_update would write to this process-global schema, which is sealed.
+            end.tap { |schema| schema.shared = true }
           end
         end
       end

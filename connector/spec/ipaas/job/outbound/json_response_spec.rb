@@ -23,4 +23,22 @@ describe IPaaS::Job::Outbound::JsonResponse do
         .to raise_error(IPaaS::Job::FailJob, 'Custom error')
     end
   end
+
+  describe 'parse_json_object_or_empty' do
+    it 'returns the parsed object of a JSON object' do
+      expect(context.parse_json_object_or_empty('{"error": {"code": "E1"}}')).to eq('error' => { 'code' => 'E1' })
+    end
+
+    it 'returns an empty hash for a body that is not JSON' do
+      expect(context.parse_json_object_or_empty('<html>Bad gateway</html>')).to eq({})
+    end
+
+    it 'returns an empty hash for JSON that is not an object' do
+      expect(context.parse_json_object_or_empty('[1, 2]')).to eq({})
+    end
+
+    it 'returns an empty hash for a missing body' do
+      expect(context.parse_json_object_or_empty(nil)).to eq({})
+    end
+  end
 end

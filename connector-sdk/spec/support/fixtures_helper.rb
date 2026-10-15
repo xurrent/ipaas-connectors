@@ -4,7 +4,8 @@ def load_all_fixtures
   load_fixture('*')
 end
 
-# Loads a connector fixture by name, with its constants made deeply immutable.
+# Loads a connector fixture by name, with its constants made deeply immutable and the connector
+# sealed, as every loaded connector is.
 # Supports both the folder layout
 # (fixtures/<name>/<name>.rb, where bundled SVGs live alongside the .rb) and the
 # legacy flat layout (fixtures/<name>.rb). When both exist for the same name the
@@ -13,7 +14,10 @@ end
 # @return [void]
 def load_fixture(filename)
   fixture_entrypoints(filename).each { |f| require f }
-  fixture_classes(filename).each { |klass| IPaaS::Connector::Definition.make_constants_shareable(klass) }
+  fixture_classes(filename).each do |klass|
+    IPaaS::Connector::Definition.make_constants_shareable(klass)
+    klass.connector(nil)&.seal!
+  end
 end
 
 # The connector classes the entrypoints for +filename+ define. Selected by source file: a subclass

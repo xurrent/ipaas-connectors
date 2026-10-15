@@ -1863,6 +1863,7 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
         field :payload, 'Payload', :base64
         field :cfg, 'Cfg', :nested do
           field :name, 'Name', :string
+          field :pattern, 'Pattern', :regexp
         end
       end
     end
@@ -1895,6 +1896,13 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
       resolved = validate_text([{ field_id: :bodies, proc: %(['ok', #{undecodable}]) }])
       expect(resolved.errors[:base])
         .to eq(["Field 'bodies[1]' raised ArgumentError: invalid byte sequence in UTF-8"])
+    end
+
+    it 'names the sub-field when a hash mapped to a nested field cannot be handled' do
+      resolved = validate_text([{ field_id: :cfg, proc: "{ 'pattern' => '[' }" }])
+      expect(resolved.errors[:base]).to eq(
+        ["Nested field 'cfg' invalid: Field 'pattern' raised RegexpError: premature end of char-class: /[/"],
+      )
     end
 
     it 'reports a nested sub-field rather than emptying the mapping' do
@@ -1934,6 +1942,263 @@ describe IPaaS::Connector::Mapping::ResolvedMapping do
       expect(resolved.errors[:base])
         .to eq(["Field 'body' code raised ArgumentError: bad: ��"])
       expect(JSON.generate(resolved.errors[:base])).to be_a(String)
+    end
+  end
+
+  context 'a value that contains itself' do
+    let(:cyclic_schema) do
+      IPaaS::Connector::Schema.new('reference') do
+        field :bodies, 'Bodies', :string, array: true
+        field :data, 'Data', :hash
+        field :cfg, 'Cfg', :nested do
+          field :name, 'Name', :string
+          field :tags, 'Tags', :string, array: true
+        end
+      end
+    end
+
+    let(:contains_itself) { 'contains itself: an array or hash in its value includes itself.' }
+
+    def validate_cyclic(field_mapping)
+      IPaaS::Connector::Mapping::ResolvedMapping
+        .new(Object.new, cyclic_schema.fields, field_mapping)
+        .tap(&:valid?)
+    end
+
+    it 'reports an array field mapped to an array that includes itself' do
+      resolved = validate_cyclic([{ field_id: :bodies, proc: "list = ['a']; list << list; list" }])
+      expect(resolved).not_to be_valid
+      expect(resolved.errors[:base]).to eq(["Field 'bodies' #{contains_itself}"])
+      expect(resolved.mapping.first.errors[:base]).to eq(["Field 'bodies' #{contains_itself}"])
+      expect(resolved).not_to have_key(:bodies)
+    end
+
+    it 'reports an array that includes itself through another array' do
+      resolved = validate_cyclic([{ field_id: :bodies, proc: "list = ['a']; list << [list]; list" }])
+      expect(resolved.errors[:base]).to eq(["Field 'bodies' #{contains_itself}"])
+      expect(resolved).not_to have_key(:bodies)
+    end
+
+    it 'reports a hash field mapped to a hash that includes itself' do
+      resolved = validate_cyclic([{ field_id: :data, proc: "data = { 'a' => 1 }; data['self'] = data; data" }])
+      expect(resolved.errors[:base]).to eq(["Field 'data' #{contains_itself}"])
+      expect(resolved).not_to have_key(:data)
+    end
+
+    it 'reports a nested field mapped to a hash that includes itself' do
+      resolved = validate_cyclic([{ field_id: :cfg, proc: "cfg = { 'name' => 'n' }; cfg['name'] = [cfg]; cfg" }])
+      expect(resolved.errors[:base]).to eq(["Field 'cfg' #{contains_itself}"])
+      expect(resolved).not_to have_key(:cfg)
+    end
+
+    it 'keeps resolving the other fields' do
+      resolved = validate_cyclic(
+        [
+          { field_id: :data, proc: "data = {}; data['self'] = data; data" },
+          { field_id: :bodies, proc: "['a', 'b']" },
+        ],
+      )
+      expect(resolved.errors[:base]).to eq(["Field 'data' #{contains_itself}"])
+      expect(resolved).not_to have_key(:data)
+      expect(resolved[:bodies]).to eq(%w[a b])
+    end
+
+    it 'accepts a value that appears twice without including itself' do
+      shared_twice = "shared = { 'a' => 1 }; { 'p' => shared, 'q' => [shared] }"
+      resolved = validate_cyclic([{ field_id: :data, proc: shared_twice }])
+      expect(resolved).to be_valid
+      expect(resolved[:data]).to eq('p' => { 'a' => 1 }, 'q' => [{ 'a' => 1 }])
+    end
+
+    it 'reports a sub-field of a nested mapping' do
+      resolved = validate_cyclic(
+        [{ field_id: :cfg, nested: [{ field_id: :tags, proc: "list = ['a']; list << list; list" }] }],
+      )
+      expect(resolved.errors[:base]).to eq(["Nested field 'cfg' invalid: Field 'tags' #{contains_itself}"])
+    end
+
+    it 'still validates the other sub-fields of a nested mapping that holds a value' do
+      schema = IPaaS::Connector::Schema.new('reference') do
+        field :cfg, 'Cfg', :nested do
+          field :name, 'Name', :string
+          field :code, 'Code', :string, required: true
+          field :tags, 'Tags', :string, array: true
+        end
+      end
+      nested = [{ field_id: :name, fixed: 'n' }, { field_id: :tags, proc: "list = ['a']; list << list; list" }]
+      resolved = IPaaS::Connector::Mapping::ResolvedMapping
+                 .new(Object.new, schema.fields, [{ field_id: :cfg, nested: nested }])
+                 .tap(&:valid?)
+      expect(resolved.errors[:base]).to eq(
+        [
+          "Nested field 'cfg' invalid: Field 'tags' #{contains_itself}",
+          "Nested field 'cfg' invalid: Field 'code' is required.",
+        ],
+      )
+    end
+
+    context 'in a nested field whose type rebuilds the values' do
+      let(:rebuilt_schema) do
+        IPaaS::Connector::Schema.new('reference') do
+          field :rec, 'Rec', :recurrence
+          field :at, 'At', :date_time
+        end
+      end
+
+      let(:recurrence) do
+        [
+          { field_id: :frequency, fixed: 'daily' },
+          { field_id: :time_zone, fixed: 'UTC' },
+          { field_id: :time_of_day, fixed: '10:00' },
+          { field_id: :start_date, proc: "list = ['a']; list << list; list" },
+        ]
+      end
+
+      def resolve_rebuilt(field_mapping)
+        rebuilt_schema.resolve(Object.new, field_mapping).tap(&:valid?)
+      end
+
+      it 'reports the sub-field' do
+        resolved = resolve_rebuilt([{ field_id: :rec, nested: recurrence + [{ field_id: :interval, fixed: 1 }] }])
+        expect(resolved.errors[:base]).to eq(["Nested field 'rec' invalid: Field 'start_date' #{contains_itself}"])
+      end
+
+      it 'still reports what the type itself finds wrong' do
+        resolved = resolve_rebuilt([{ field_id: :rec, nested: recurrence }])
+        expect(resolved.errors[:base]).to eq(
+          [
+            "Nested field 'rec' invalid: Field 'interval' is required.",
+            "Nested field 'rec' invalid: Field 'start_date' #{contains_itself}",
+          ],
+        )
+      end
+
+      it 'reports a sub-field of a date and time' do
+        nested = [
+          { field_id: :date, fixed: '2026-10-01' },
+          { field_id: :time, fixed: '10:00' },
+          { field_id: :time_zone, proc: "zone = ['UTC']; zone << zone; zone" },
+        ]
+        resolved = resolve_rebuilt([{ field_id: :at, nested: nested }])
+        expect(resolved.errors[:base]).to eq(["Nested field 'at' invalid: Field 'time_zone' #{contains_itself}"])
+      end
+    end
+
+    it 'reports a sub-field of a nested mapping when a running job resolves the schema' do
+      resolved = cyclic_schema.resolve(
+        Object.new, [{ field_id: :cfg, nested: [{ field_id: :tags, proc: "list = ['a']; list << list; list" }] }],
+      )
+      expect(resolved).not_to be_valid
+      expect(resolved.errors[:base]).to eq(["Nested field 'cfg' invalid: Field 'tags' #{contains_itself}"])
+    end
+
+    it 'reports it once when a running job resolves the schema' do
+      resolved = cyclic_schema.resolve(Object.new, [{ field_id: :bodies, proc: "list = ['a']; list << list; list" }])
+      expect(resolved).not_to be_valid
+      expect(resolved.errors[:base]).to eq(["Field 'bodies' #{contains_itself}"])
+    end
+
+    it 'leaves the field unset and records why on the resolve a running job makes' do
+      resolved = resolve([{ field_id: :bodies, proc: "list = ['a']; list << list; list" }], schema: cyclic_schema)
+      expect(resolved).not_to have_key(:bodies)
+      expect(resolved.errors[:base]).to eq(["Field 'bodies' #{contains_itself}"])
+    end
+  end
+
+  context 'a value nested too deeply' do
+    let(:deep_schema) do
+      IPaaS::Connector::Schema.new('reference') do
+        field :data, 'Data', :hash
+        field :items, 'Items', :hash, array: true
+        field :cfg, 'Cfg', :nested do
+          field :data, 'Data', :hash
+          field :items, 'Items', :hash, array: true
+        end
+        field :rows, 'Rows', :nested, array: true do
+          field :data, 'Data', :hash
+        end
+      end
+    end
+
+    let(:max_depth) { IPaaS::Connector::Mapping::NestingCheck::MAX_DEPTH }
+
+    def hashes(levels)
+      "x = 1; (1..#{levels}).each { x = { 'a' => x } }; x"
+    end
+
+    def deep(levels)
+      (1..levels).reduce(1) { |inner, _| { 'a' => inner } }
+    end
+
+    def too_deep(field, levels)
+      "Field '#{field}' is nested too deeply: its value goes more than #{levels} levels deep."
+    end
+
+    def validate_deep(field_mapping)
+      IPaaS::Connector::Mapping::ResolvedMapping
+        .new(Object.new, deep_schema.fields, field_mapping)
+        .tap(&:valid?)
+    end
+
+    it 'accepts a value that still serializes as JSON within the mapping' do
+      resolved = validate_deep([{ field_id: :data, proc: hashes(max_depth - 1) }])
+      expect(resolved).to be_valid
+      expect(resolved[:data]).to eq(deep(max_depth - 1))
+      expect { JSON.generate(resolved) }.not_to raise_error
+    end
+
+    it 'reports a value one level deeper' do
+      resolved = validate_deep([{ field_id: :data, proc: hashes(max_depth) }])
+      expect(resolved.errors[:base]).to eq([too_deep(:data, max_depth - 1)])
+      expect(resolved.mapping.first.errors[:base]).to eq([too_deep(:data, max_depth - 1)])
+      expect(resolved).not_to have_key(:data)
+    end
+
+    it 'counts the list an array field puts a single value in' do
+      accepted = validate_deep([{ field_id: :items, proc: "#{hashes(max_depth - 2)}; [x]" }])
+      expect(accepted).to be_valid
+      expect(accepted[:items]).to eq([deep(max_depth - 2)])
+      resolved = validate_deep([{ field_id: :items, proc: hashes(max_depth - 1) }])
+      expect(resolved.errors[:base]).to eq([too_deep(:items, max_depth - 2)])
+      expect(resolved.mapping.first.errors[:base]).to eq([too_deep(:items, max_depth - 2)])
+      expect(resolved).not_to have_key(:items)
+    end
+
+    it 'counts the levels a nested field adds' do
+      accepted = validate_deep([{ field_id: :cfg, nested: [{ field_id: :data, proc: hashes(max_depth - 2) }] }])
+      expect(accepted).to be_valid
+      expect(accepted[:cfg][:data]).to eq(deep(max_depth - 2))
+      resolved = validate_deep([{ field_id: :cfg, nested: [{ field_id: :data, proc: hashes(max_depth - 1) }] }])
+      expect(resolved.errors[:base]).to eq(["Nested field 'cfg' invalid: #{too_deep(:data, max_depth - 2)}"])
+      expect(resolved.mapping.first.nested.first.errors[:base]).to eq([too_deep(:data, max_depth - 2)])
+      expect(resolved[:cfg]).not_to have_key(:data)
+    end
+
+    it 'accepts a hash for a nested field up to what still serializes' do
+      accepted = validate_deep([{ field_id: :cfg, proc: "#{hashes(max_depth - 2)}; { 'items' => x }" }])
+      expect(accepted).to be_valid
+      expect(accepted[:cfg][:items]).to eq(deep(max_depth - 2))
+      expect { JSON.generate(accepted) }.not_to raise_error
+      rejected = validate_deep([{ field_id: :cfg, proc: "#{hashes(max_depth - 1)}; { 'items' => x }" }])
+      expect(rejected.errors[:base]).to eq([too_deep(:cfg, max_depth - 1)])
+      expect(rejected.mapping.first.errors[:base]).to eq([too_deep(:cfg, max_depth - 1)])
+    end
+
+    it 'counts the list a nested array field puts its mapping in' do
+      accepted = validate_deep([{ field_id: :rows, nested: [{ field_id: :data, proc: hashes(max_depth - 3) }] }])
+      expect(accepted).to be_valid
+      expect(accepted[:rows].first[:data]).to eq(deep(max_depth - 3))
+      resolved = validate_deep([{ field_id: :rows, nested: [{ field_id: :data, proc: hashes(max_depth - 2) }] }])
+      expect(resolved.errors[:base]).to eq(["Nested field 'rows' invalid: #{too_deep(:data, max_depth - 3)}"])
+      expect(resolved.mapping.first.nested.first.errors[:base]).to eq([too_deep(:data, max_depth - 3)])
+      expect(resolved[:rows].first).not_to have_key(:data)
+    end
+
+    it 'reports a value far beyond the bound when a running job resolves the schema' do
+      mapping = [{ field_id: :data, proc: hashes(max_depth * 10) }]
+      resolved = Thread.new { deep_schema.resolve(Object.new, mapping).tap(&:valid?) }.value
+      expect(resolved.errors[:base]).to eq([too_deep(:data, max_depth - 1)])
+      expect(resolved).not_to have_key(:data)
     end
   end
 end

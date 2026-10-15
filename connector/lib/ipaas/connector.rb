@@ -7,7 +7,7 @@ require 'active_support/all'
 
 require 'active_model'
 require 'cgi'
-require 'rubocop'
+require 'rubocop-ast'
 require 'rack'
 require 'faraday'
 require 'faraday/multipart'
@@ -28,7 +28,7 @@ module IPaaS
       if const_defined?(:Rails) && const_defined?(:ENVx) && Rails.root
         return @solution_directory if @solution_directory
 
-        @solution_directory = Rails.root.join(ENVx.SOLUTION_DATA_DIR).to_s
+        return @solution_directory = Rails.root.join(ENVx.SOLUTION_DATA_DIR).to_s
       end
       'tmp/solutions'
     end
@@ -62,6 +62,7 @@ module IPaaS
 end
 
 require 'ipaas/connector/common/proc_rules/proc_safe'
+require 'ipaas/connector/common/sealing'
 require 'ipaas/connector/core_ext/drill'
 require 'ipaas/connector/core_ext/method_source_patch'
 require 'ipaas/connector/dsl/boolean'
@@ -188,6 +189,7 @@ require 'ipaas/connector/connector'
 require 'ipaas/connector/definition'
 require 'ipaas/connector/mapping/field_mapping'
 require 'ipaas/connector/mapping/schema_name_mapping'
+require 'ipaas/connector/mapping/nesting_check'
 require 'ipaas/connector/mapping/resolved_mapping'
 
 require 'ipaas/connector/connection'
@@ -223,3 +225,5 @@ require 'ipaas/encryption/system_key_provider'
 require 'ipaas/encryption/stored_crypto_key'
 require 'ipaas/encryption/test_key_provider'
 require 'ipaas/encryption/test_kms'
+
+IPaaS::Connector::Common::Sealing.seal_globals!

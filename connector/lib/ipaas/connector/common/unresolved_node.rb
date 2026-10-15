@@ -16,13 +16,10 @@ module IPaaS
             Thread.current[CHECKED_NODES_KEY] = nil
           end
 
-          def within?(value, seen = nil)
-            return true if value.is_a?(self)
+          def within?(value)
+            return value.is_a?(self) unless walkable?(value)
 
-            case value
-            when Hash, Array then within_collection?(value, seen || new_visited_set)
-            else within_ivars?(value, seen)
-            end
+            !nodes_within(value, first_only: true).empty?
           end
 
           def symbolize(value)
@@ -32,62 +29,56 @@ module IPaaS
           end
 
           def all_within(value)
-            [].tap { |found| each_within(value) { |node| found << node } }
+            nodes_within(value, first_only: false)
           end
 
           private
 
-          def new_visited_set
-            Set.new.compare_by_identity
+          def walkable?(value)
+            value.is_a?(Array) || value.is_a?(Hash) || Serializer::ALLOWED_CLASS_SET.include?(value.class)
           end
 
-          def within_collection?(value, seen)
-            return false unless seen.add?(value)
+          def nodes_within(value, first_only:)
+            found = []
+            seen = Set.new.compare_by_identity
+            pending = [value]
+            until pending.empty?
+              node = pending.pop
+              next push_members(node, seen, pending) unless node.is_a?(self)
 
+              found << node
+              break if first_only
+            end
+            found
+          end
+
+          def push_members(value, seen, pending)
             case value
-            when Hash then value.any? { |key, nested| within?(key, seen) || within?(nested, seen) }
-            else value.any? { |nested| within?(nested, seen) }
+            when Array then push_array(value, seen, pending)
+            when Hash then push_hash(value, seen, pending)
+            else push_ivars(value, seen, pending)
             end
           end
 
-          def within_ivars?(value, seen = nil)
-            return false unless Serializer::ALLOWED_CLASS_SET.include?(value.class)
+          def push_array(array, seen, pending)
+            return unless seen.add?(array)
 
-            seen ||= new_visited_set
-            return false unless seen.add?(value)
-
-            value.instance_variables.any? { |name| within?(value.instance_variable_get(name), seen) }
+            array.reverse_each { |member| pending << member }
           end
 
-          def each_within(value, seen = nil, &block)
-            return yield(value) if value.is_a?(self)
+          def push_hash(hash, seen, pending)
+            return unless seen.add?(hash)
 
-            case value
-            when Hash, Array then each_within_collection(value, seen || new_visited_set, &block)
-            else each_within_ivars(value, seen, &block)
+            hash.reverse_each do |key, nested|
+              pending << nested << key
             end
           end
 
-          def each_within_collection(value, seen, &block)
-            return unless seen.add?(value)
-
-            case value
-            when Hash
-              value.each do |key, nested|
-                each_within(key, seen, &block)
-                each_within(nested, seen, &block)
-              end
-            else value.each { |nested| each_within(nested, seen, &block) }
-            end
-          end
-
-          def each_within_ivars(value, seen = nil, &block)
+          def push_ivars(value, seen, pending)
             return unless Serializer::ALLOWED_CLASS_SET.include?(value.class)
+            return if value.instance_variables.empty? || !seen.add?(value)
 
-            seen ||= new_visited_set
-            return unless seen.add?(value)
-
-            value.instance_variables.each { |name| each_within(value.instance_variable_get(name), seen, &block) }
+            value.instance_variables.reverse_each { |name| pending << value.instance_variable_get(name) }
           end
 
           def reject_aliases!(node)

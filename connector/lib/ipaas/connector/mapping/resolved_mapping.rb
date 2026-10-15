@@ -9,6 +9,7 @@ module IPaaS
           "Schema entry '%<field>' must be an object with an id, label and type; it was treated as a text field.".freeze
         IGNORED_SCHEMA_FIELD_MSG =
           "Schema entry '%<field>' is not a valid field definition and was ignored.".freeze
+        CONTAINS_ITSELF_MSG = "Field '%<field>' contains itself: an array or hash in its value includes itself.".freeze
 
         class << self
           attr_accessor :resolution_observer
@@ -22,6 +23,7 @@ module IPaaS
         end
 
         attr_accessor :context, :base_error
+        attr_reader :nesting
         attribute :fields, type: [IPaaS::Connector::Schema::Field]
         attribute :mapping, type: [IPaaS::Connector::Mapping::FieldMapping]
 
@@ -31,9 +33,10 @@ module IPaaS
         # delegate hash (manipulation) methods to the plain hash version
         delegate :slice, :slice!, :except, :except!, to: :to_hash
 
-        def initialize(context, schema_fields, mapping)
+        def initialize(context, schema_fields, mapping, nesting: 1)
           super()
           @context = context
+          @nesting = nesting
           @fields = schema_fields
           @mapping = IPaaS::Connector::Mapping::FieldMapping.parse(mapping)
         end
@@ -67,6 +70,7 @@ module IPaaS
         private
 
         def add_resolved(field, resolved_value)
+          return if unstorable?(field, resolved_value)
           return add_resolved_array(field, resolved_value) if field.array
 
           mapping_error(field, "Field '%<field>' is mapped twice.") if self.key?(field.id)
@@ -97,6 +101,32 @@ module IPaaS
               validate_field(field, resolved_element_value, field_designator: designator)
             end
           end
+        end
+
+        def unstorable?(field, value)
+          max_depth = depth_left_for(field, value)
+          message = case NestingCheck.problem(value, max_depth: max_depth)
+                    when :contains_itself then CONTAINS_ITSELF_MSG
+                    when :too_deep then too_deep_message(max_depth)
+                    end
+          return false unless message
+
+          flag_unstorable(field, message)
+          true
+        end
+
+        def depth_left_for(field, value)
+          NestingCheck::MAX_DEPTH - @nesting - (field.array && !value.is_a?(Array) ? 1 : 0)
+        end
+
+        def too_deep_message(max_depth)
+          "Field '%<field>' is nested too deeply: its value goes more than #{max_depth} levels deep."
+        end
+
+        def flag_unstorable(field, message)
+          return mapping_error(field, message) if @validating_mapping
+
+          errors.add(:base, interpolate_error_message(message, field.id.to_s, []))
         end
 
         def unresolved_value?(value)
@@ -144,11 +174,13 @@ module IPaaS
 
         def mapping_valid?
           @validating_mapping = true
+          @nested_unseen_by_validation = []
           clear # clear the hash
           mapping.each { |field_mapping| field_mapping.errors.clear } # clear field mapping errors
           clear_nested_field_mapping_errors
           resolve # re-resolve to collect errors on individual resolved field values
           validate_fields # validations on groups of fields
+          report_nested_unseen_by_validation
           @validating_mapping = false
         end
 
@@ -231,7 +263,20 @@ module IPaaS
         end
 
         def resolve_nested(field, mapping)
-          ResolvedMapping.new(self.context, field.fields, mapping).resolve
+          nesting = @nesting + (field.array ? 2 : 1)
+          ResolvedMapping.new(self.context, field.fields, mapping, nesting: nesting).resolve.tap do |nested|
+            @nested_unseen_by_validation << [field, nested] if unseen_by_validation?(field, nested)
+          end
+        end
+
+        def unseen_by_validation?(field, nested)
+          return false unless @validating_mapping && nested.errors.any?
+
+          nested.blank? || !field.type_def.equal?(IPaaS::Connector::Types::NestedType)
+        end
+
+        def report_nested_unseen_by_validation
+          @nested_unseen_by_validation.each { |field, nested| add_nested_field_errors(field, nested, field.id.to_s) }
         end
 
         # called when all fields have been resolved
@@ -353,7 +398,8 @@ module IPaaS
           resolved_value = if value.respond_to?(:valid?)
                              value
                            elsif value.is_a?(Hash)
-                             resolve_nested(field, IPaaS::Connector::Mapping::FieldMapping.fixed_mapping(value))
+                             fixed_mapping = IPaaS::Connector::Mapping::FieldMapping.fixed_mapping(value)
+                             ResolvedMapping.new(self.context, field.fields, fixed_mapping)
                            end
           return if resolved_value.nil? || resolved_value.valid?
 

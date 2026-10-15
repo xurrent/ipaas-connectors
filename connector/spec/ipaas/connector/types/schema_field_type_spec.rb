@@ -103,29 +103,36 @@ describe IPaaS::Connector::Types::SchemaFieldType do
         double(connector: IPaaS::Connector::Connector.new('uuid'))
       end
 
-      it 'should enable the fields when type is nested' do
-        expect(schema.field(:fields).disabled).to be_truthy
-        schema.resolve(context, [
-          { field_id: 'type', fixed: 'nested' },
-        ])
-        expect(schema.field(:fields).disabled).to be_falsey
+      # The schema is process-global, so its after_update acts on a copy and the result carries the copy's fields,
+      # leaving the global as it was.
+      def resolved_field(resolved, id)
+        resolved.fields.detect { |field| field.id == id }
+      end
+
+      it 'should enable the fields only when type is nested' do
+        nested, flat = %w[nested float].map do |type|
+          resolved_field(schema.resolve(context, [{ field_id: 'type', fixed: type }]), :fields)
+        end
+        expect(nested.disabled).to be_falsey
+        expect(flat.disabled).to be(true)
+        expect(schema.field(:fields).disabled).to be(true)
       end
 
       it 'should set the type enumeration' do
-        schema.resolve(context, [])
-        types = schema.field(:type).enumeration.pluck(:id).sort
+        types = resolved_field(schema.resolve(context, []), :type).enumeration.pluck(:id).sort
         expect(types).to include('string')
         expect(types).to include('nested')
         expect(types).to include('recurrence')
         expect(types).to include('runbook')
+        expect(schema.field(:type).enumeration).to be_empty
       end
 
       it 'should set the type of the default and sample' do
-        schema.resolve(context, [
+        resolved = schema.resolve(context, [
           { field_id: 'type', fixed: 'float' },
         ])
-        expect(schema.field(:default).type).to eq('float')
-        expect(schema.field(:sample).type).to eq('float')
+        expect(resolved_field(resolved, :default).type).to eq('float')
+        expect(resolved_field(resolved, :sample).type).to eq('float')
       end
 
       it 'should resolve nested fields' do
@@ -150,44 +157,19 @@ describe IPaaS::Connector::Types::SchemaFieldType do
         expect(resolved[:fields].last.id).to eq(:nr)
         expect(resolved[:fields].last.type).to eq(:integer)
       end
-
-      it 'should resolve deeply nested fields' do
-        resolved = schema.resolve(context, [
-          { field_id: 'id', fixed: 'cars' },
-          { field_id: 'type', fixed: 'nested' },
-          { field_id: 'fields', nested: [
-            { field_id: 'id', fixed: 'owner' },
-            { field_id: 'type', fixed: 'nested' },
-            { field_id: 'fields', nested: [
-              { field_id: 'id', fixed: 'dog' },
-              { field_id: 'type', fixed: 'nested' },
-              { field_id: 'fields', nested: [
-                { field_id: 'id', fixed: 'name' },
-                { field_id: 'type', fixed: 'string' },
-              ], },
-              { field_id: 'fields', nested: [
-                { field_id: 'id', fixed: 'age' },
-                { field_id: 'type', fixed: 'integer' },
-              ], },
-            ], },
-          ], },
-        ])
-        expect(resolved[:id]).to eq('cars')
-        owner = resolved[:fields].first
-        expect(owner.type).to eq(:nested)
-        dog = owner.fields.first
-        expect(dog.type).to eq(:nested)
-        dog_name = dog.fields.first
-        expect(dog_name.id).to eq(:name)
-        expect(dog_name.type).to eq(:string)
-        dog_age = dog.fields.last
-        expect(dog_age.id).to eq(:age)
-        expect(dog_age.type).to eq(:integer)
-      end
     end
   end
 
   describe 'resolve' do
+    # A template's default or sample is frozen for a sealed connector, and validation resolves it again.
+    it 'works on a frozen hash' do
+      value = { id: 'nr', label: 'Nr', type: 'integer' }.freeze
+
+      resolved = IPaaS::Connector::Types::SchemaFieldType.resolve(value)
+
+      expect([resolved.id, resolved.type]).to eq([:nr, :integer])
+    end
+
     it 'should resolve nested fields' do
       resolved = IPaaS::Connector::Types::SchemaFieldType.resolve({
         id: 'cars',
@@ -205,6 +187,28 @@ describe IPaaS::Connector::Types::SchemaFieldType do
       expect(resolved.fields.first.type).to eq(:integer)
       expect(resolved.fields.first.min).to eq(1)
       expect(resolved.fields.first.max).to eq(99)
+    end
+
+    it 'should resolve deeply nested fields' do
+      resolved = IPaaS::Connector::Types::SchemaFieldType.resolve({
+        id: 'cars',
+        type: 'nested',
+        fields: [{
+          id: 'owner',
+          type: 'nested',
+          fields: [{
+            id: 'dog',
+            type: 'nested',
+            fields: [{ id: 'name', type: 'string' }, { id: 'age', type: 'integer' }],
+          }],
+        }],
+      },)
+
+      owner = resolved.fields.first
+      dog = owner.fields.first
+      expect([owner.id, owner.type]).to eq([:owner, :nested])
+      expect([dog.id, dog.type]).to eq([:dog, :nested])
+      expect(dog.fields.map { |field| [field.id, field.type] }).to eq([[:name, :string], [:age, :integer]])
     end
 
     it 'should filter out nil entries in fields' do

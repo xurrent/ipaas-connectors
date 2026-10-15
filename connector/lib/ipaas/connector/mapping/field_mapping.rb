@@ -130,7 +130,7 @@ module IPaaS
 
             raise IPaaS::Error, 'Field mapping must be a hash.' unless array_or_hash.is_a?(Hash)
 
-            FieldMapping.new.tap { |mapping| copy_field_mapping_values(mapping, array_or_hash.deep_symbolize_keys) }
+            FieldMapping.new.tap { |mapping| copy_field_mapping_values(mapping, symbolized(array_or_hash)) }
           rescue Psych::SyntaxError
             raise IPaaS::Error, "Field mapping must be a YAML hash. Found: #{field_mapping.inspect}."
           rescue Psych::DisallowedClass => e
@@ -147,6 +147,14 @@ module IPaaS
           end
 
           private
+
+          def symbolized(field_mapping)
+            fixed_key = field_mapping.keys.detect { |key| key.to_s == 'fixed' }
+            fixed = field_mapping[fixed_key]
+            return field_mapping.deep_symbolize_keys unless fixed_key && NestingCheck.problem(fixed)
+
+            field_mapping.except(fixed_key).deep_symbolize_keys.merge(fixed: fixed)
+          end
 
           def copy_field_mapping_values(field_mapping, hash)
             field_mapping.field_id = IPaaS::Connector::Common::UnresolvedNode.symbolize(hash[:field_id])

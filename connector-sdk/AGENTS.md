@@ -17,21 +17,16 @@
 
 `helpers` hands a proc a proxy that dispatches registered helper names and nothing else, so it
 cannot be stubbed — `allow(trigger.helpers).to receive(:my_helper)` fails with
-`Missing helper method '__id__'.` because RSpec cannot introspect it.
+`Missing helper method '__id__'.` because RSpec cannot introspect it. Nor can anything behind it:
+a connector is sealed once it loads, and RSpec refuses to stub a frozen object
+(`Cannot proxy frozen objects`).
 
-Stub the helper's `ProcHelper` instead, which is what dispatch calls:
-
-```ruby
-def helper_proc(name)
-  trigger.trigger_template.helpers_definition.registered_helper(name)
-end
-
-allow(helper_proc(:upload_inline_images)).to receive(:execute).and_return(nil)
-expect(helper_proc(:upload_inline_images)).to have_received(:execute).with(an_instance_of(Hash))
-```
-
-`registered_helper` walks the chain, so a connector-level helper resolves from an action or
-trigger template. `execute` receives the helper's own arguments unchanged.
+Stub on the trigger or action instead, which is the solution's own and never sealed: hand it a
+stand-in that defines the helpers you stub as real methods and forwards everything else. A proc
+resolves `helpers` on the trigger or action it runs on, so connector-level helpers are reached
+through the stand-in as well. `HelpersSpy` in
+`spec/ipaas/connector/sdk/examples/xurrent-app-connector/shared/app_offering_blueprint_specs.rb`
+shows the pattern.
 
 ## Constraints the platform enforces before your `run` block
 

@@ -1,6 +1,20 @@
 module AppOfferingBlueprintSpecs
   SECOND_SCOPE_ID = 842
 
+  # The helpers proxy dispatches registered names only, so rspec cannot stub it; this stand-in
+  # defines the stubbed helpers as real methods and forwards the rest.
+  class HelpersSpy
+    def initialize(helpers)
+      @helpers = helpers
+    end
+
+    def extract_inline_images(...) = @helpers.method_missing(:extract_inline_images, ...)
+    def upload_inline_images(...) = @helpers.method_missing(:upload_inline_images, ...)
+
+    def method_missing(name, ...) = @helpers.method_missing(name, ...)
+    def respond_to_missing?(name, include_private = false) = @helpers.respond_to?(name) || super
+  end
+
   def self.included(base)
     base.class_eval do
       describe 'blueprint' do
@@ -8,10 +22,10 @@ module AppOfferingBlueprintSpecs
           stub_xurrent_oauth2_token(outbound_connection_config)
         end
 
-        # `helpers` hands procs a proxy that dispatches registered names only, so it cannot be
-        # stubbed. Dispatch calls `ProcHelper#execute`, which receives the helper's own arguments.
-        def helper_proc(name)
-          trigger.trigger_template.helpers_definition.registered_helper(name)
+        # A trigger's procs resolve `helpers` on the trigger, so the spy stands in there rather
+        # than on the connector's own helpers.
+        let(:helpers_spy) do
+          HelpersSpy.new(trigger.helpers).tap { |spy| allow(trigger).to receive(:helpers).and_return(spy) }
         end
 
         let(:endpoint) do
@@ -782,8 +796,8 @@ module AppOfferingBlueprintSpecs
 
         context 'extract' do
           before(:each) do
-            allow(helper_proc(:extract_inline_images)).to receive(:execute).and_return(nil)
-            allow(helper_proc(:upload_inline_images)).to receive(:execute).and_return(nil)
+            allow(helpers_spy).to receive(:extract_inline_images).and_return(nil)
+            allow(helpers_spy).to receive(:upload_inline_images).and_return(nil)
           end
 
           it 'should extract the app offering json' do
@@ -863,11 +877,11 @@ module AppOfferingBlueprintSpecs
             stub_request(:get, 'https://example.com/desc_image.png')
               .to_return(body: 'fake_image_data_2', status: 200)
 
-            allow(helper_proc(:extract_inline_images)).to receive(:execute).and_call_original
+            allow(helpers_spy).to receive(:extract_inline_images).and_call_original
 
             trigger.extract_blueprint
 
-            expect(helper_proc(:extract_inline_images)).to have_received(:execute).with(an_instance_of(Hash))
+            expect(helpers_spy).to have_received(:extract_inline_images).with(an_instance_of(Hash))
           end
         end
 
@@ -877,8 +891,8 @@ module AppOfferingBlueprintSpecs
             trigger.blueprint_store.write('app_offering_ui_extension.json', yoda_ui_extension_blueprint)
             trigger.blueprint_store.write('app_offering_automation_rules.json', yoda_automation_rules_blueprint)
 
-            allow(helper_proc(:extract_inline_images)).to receive(:execute).and_return(nil)
-            allow(helper_proc(:upload_inline_images)).to receive(:execute).and_return(nil)
+            allow(helpers_spy).to receive(:extract_inline_images).and_return(nil)
+            allow(helpers_spy).to receive(:upload_inline_images).and_return(nil)
           end
 
           it 'should handle a service instance not found' do
@@ -1063,7 +1077,7 @@ module AppOfferingBlueprintSpecs
                 appOffering: { id: 'app-offering-id', reference: 'yoda' }, errors: [],
               } } }.to_json)
 
-            allow(helper_proc(:upload_inline_images)).to receive(:execute).and_call_original
+            allow(helpers_spy).to receive(:upload_inline_images).and_call_original
 
             find_no_app_offering_stub
             find_no_ui_extension_by_source_stub
@@ -1076,7 +1090,7 @@ module AppOfferingBlueprintSpecs
             expect(find_no_app_offering_stub).to have_been_requested.once
             expect(create_app_offering_stub).to have_been_requested
 
-            expect(helper_proc(:upload_inline_images)).to have_received(:execute).with(an_instance_of(Hash))
+            expect(helpers_spy).to have_received(:upload_inline_images).with(an_instance_of(Hash))
           end
         end
 
@@ -1089,8 +1103,8 @@ module AppOfferingBlueprintSpecs
             trigger.blueprint_store.write('app_offering.json', yoda_app_offering_blueprint)
             trigger.blueprint_store.write('app_offering_ui_extension.json', yoda_ui_extension_blueprint)
             trigger.blueprint_store.write('app_offering_automation_rules.json', yoda_automation_rules_blueprint)
-            allow(helper_proc(:extract_inline_images)).to receive(:execute).and_return(nil)
-            allow(helper_proc(:upload_inline_images)).to receive(:execute).and_return(nil)
+            allow(helpers_spy).to receive(:extract_inline_images).and_return(nil)
+            allow(helpers_spy).to receive(:upload_inline_images).and_return(nil)
           end
 
           # B6 — find App Offering interpolates the configured app_reference

@@ -150,7 +150,7 @@ module IPaaS
         end
 
         def oauth2_error_reason(status, body)
-          parsed_body = safe_parse_json(body)
+          parsed_body = parse_json_object_or_empty(body)
           return unless customer_credentials_error?(status, parsed_body)
 
           code = parsed_body['error'].presence
@@ -165,13 +165,6 @@ module IPaaS
           return true if [401, 403].include?(status)
           return false unless status == 400
           CUSTOMER_OAUTH2_ERROR_CODES.include?(parsed_body['error'])
-        end
-
-        def safe_parse_json(body)
-          parsed = JSON.parse(body.to_s)
-          parsed.is_a?(Hash) ? parsed : {}
-        rescue JSON::ParserError
-          {}
         end
 
         def extract_bearer_token(response_body)

@@ -2,6 +2,8 @@ module IPaaS
   module Connector
     module Common
       class Helpers
+        include IPaaS::Connector::Common::Sealing::Member
+
         class << self
           # `helpers` must never answer nil: a proc would then be calling methods on `nil` rather
           # than on the proxy. Contexts with no helpers of their own get this instead.

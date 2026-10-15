@@ -5,6 +5,7 @@ module IPaaS
       include IPaaS::Connector::Common::UuidMixin
       include IPaaS::Job::Context # for validation of (schema) functions
       include IPaaS::Connector::Dsl::HelpersMixin
+      include IPaaS::Connector::Common::Sealing::Member
 
       # Must start with letter or number
       # Can contain letters, numbers, underscore, hyphen

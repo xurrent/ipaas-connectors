@@ -5,6 +5,7 @@ module IPaaS
       include IPaaS::Connector::Common::UuidMixin
       include IPaaS::Job::Context # for validation of (schema) functions
       include IPaaS::Connector::Dsl::HelpersMixin
+      include IPaaS::Connector::Common::Sealing::Member
 
       attr_reader :connector
 

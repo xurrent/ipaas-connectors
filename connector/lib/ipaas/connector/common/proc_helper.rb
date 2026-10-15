@@ -5,6 +5,8 @@ module IPaaS
   module Connector
     module Common
       class ProcHelper
+        include IPaaS::Connector::Common::Sealing::Member
+
         ACTION_OUTPUT_REGEX = /action_output\('([^']+)'|action_output\("([^"]+)"/
 
         # This version is used as a baseline for allowed constructs/methods.
@@ -240,6 +242,10 @@ module IPaaS
           false
         end
 
+        def warm_for_seal
+          validation_cache_key
+        end
+
         def execute_if_valid(...)
           return nil unless valid?
 
@@ -256,6 +262,8 @@ module IPaaS
               run_proc_with_params(ctx, *params, **kwargs)
             end
           end
+        rescue FrozenError => e
+          raise Sealing.refusal(e), cause: nil
         end
 
         private

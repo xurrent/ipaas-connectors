@@ -153,6 +153,44 @@ describe IPaaS::Connector::Schema do
       expect(values).to eq({ 'foo' => 'Hello World!' })
     end
 
+    context 'below the root of what is logged or stored' do
+      let(:nesting) { IPaaS::Connector::Action::LOGGED_OUTPUT_NESTING }
+      let(:limit) { IPaaS::Connector::Mapping::NestingCheck::MAX_DEPTH - nesting }
+      let(:too_deep) { "Field 'data' is nested too deeply: its value goes more than #{limit} levels deep." }
+
+      before { schema.field :data, 'Data', :hash }
+
+      def hashes(levels)
+        (1..levels).reduce(1) { |inner, _| { 'a' => inner } }
+      end
+
+      def resolve_data(levels, **)
+        schema.resolve(Object.new, [{ field_id: 'data', fixed: hashes(levels) }], **).tap(&:valid?)
+      end
+
+      it 'counts the levels above the mapping' do
+        expect(resolve_data(limit, nesting: nesting).errors[:base]).to be_empty
+        expect(resolve_data(limit + 1, nesting: nesting).errors[:base]).to eq([too_deep])
+        expect(resolve_data(limit + 1).errors[:base]).to be_empty
+      end
+
+      it 'keeps the depth through the after_update passes' do
+        passes = 0
+        after_update = ->(fields, _values) {
+          passes += 1
+          fields
+        }
+        schema.after_update(&after_update)
+        expect(resolve_data(limit + 1, nesting: nesting).errors[:base]).to eq([too_deep])
+        expect(passes).to be_positive
+      end
+
+      it 'keeps the depth when resolving a copy of a shared schema' do
+        schema.shared = true
+        expect(resolve_data(limit + 1, nesting: nesting).errors[:base]).to eq([too_deep])
+      end
+    end
+
     it 'should execute after_update code' do
       after_update = ->(fields, values) {
         fields.detect { |f| f.id == :bar }.disabled(values[:foo] == 'Nope')

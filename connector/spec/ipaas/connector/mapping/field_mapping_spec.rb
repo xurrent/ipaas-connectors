@@ -49,6 +49,37 @@ describe IPaaS::Connector::Mapping::FieldMapping do
       end
     end
 
+    context 'a fixed value the field check rejects' do
+      def cyclic
+        value = { 'a' => 1 }
+        value['self'] = value
+        value
+      end
+
+      it 'leaves a value that contains itself as it is' do
+        value = cyclic
+        mapping = described_class.parse({ 'field_id' => 'foo', 'fixed' => value })
+        expect(mapping.fixed).to equal(value)
+        expect(mapping.field_id).to eq(:foo)
+      end
+
+      it 'recognizes the value under a symbol key too' do
+        value = cyclic
+        expect(described_class.parse({ field_id: 'foo', fixed: value }).fixed).to equal(value)
+      end
+
+      it 'leaves a value nested too deeply as it is' do
+        value = (1..(IPaaS::Connector::Mapping::NestingCheck::MAX_DEPTH * 10)).reduce(1) { |inner, _| { 'a' => inner } }
+        expect(Thread.new { described_class.parse({ 'field_id' => 'foo', 'fixed' => value }).fixed }.value)
+          .to equal(value)
+      end
+
+      it 'still symbolizes the keys of any other fixed value' do
+        expect(described_class.parse({ 'field_id' => 'foo', 'fixed' => { 'a' => { 'b' => 1 } } }).fixed)
+          .to eq(a: { b: 1 })
+      end
+    end
+
     context 'multiple fields' do
       let(:fields) do
         [

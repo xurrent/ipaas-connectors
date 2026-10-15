@@ -436,34 +436,49 @@ describe IPaaS::Connector do
     end
   end
 
-  describe 'seal_helpers!' do
+  describe 'seal!' do
     let(:built) do
       skip_function_capture_validation
       IPaaS::Connector::Connector.new('sealed-owner') do
         name 'Owner'
         inbound_connection { api_key_validator }
-        outbound_connection { api_key_authenticator }
+        outbound_connection do
+          api_key_authenticator
+          config_schema { field :host, 'Host', :string }
+        end
         trigger('t') do
           name 'Trigger one'
+          output_schema { field :event, 'Event', :string }
           parse { {} }
         end
         action('a') do
           name 'Action one'
+          input_schema do
+            field :plain, 'Plain', :string
+            field :when, 'When', :recurrence
+            field :start, 'Start', :time, default: '2020-01-01 10:00:00 +0200'
+          end
           run { 1 }
         end
       end
     end
 
-    let(:registries) do
+    let(:templates) do
       [built, built.inbound_connection, built.outbound_connection, built.trigger('t'), built.action('a')]
-        .map(&:helpers_definition)
     end
 
-    it 'seals every registry in the graph, and the hash inside each one' do
-      built.seal_helpers!
+    # What a field mapping does: run the expression with a solution's own action or trigger as `self`.
+    def run_expression(context, source)
+      field = IPaaS::Connector::Schema::Field.new.tap { |f| f.attributes = { id: :probe, label: 'Probe', type: :string } }
+      mapping = [{ field_id: 'probe', proc: source }]
+      IPaaS::Connector::Mapping::ResolvedMapping.new(context, [field], mapping).tap(&:valid?)
+    end
+
+    it 'seals every helper registry in the graph, and the hash inside each one' do
+      built.seal!
 
       aggregate_failures do
-        registries.each do |registry|
+        templates.map(&:helpers_definition).each do |registry|
           expect(registry).to be_frozen
           expect(registry.proc_helpers_by_name).to be_frozen
         end
@@ -474,7 +489,7 @@ describe IPaaS::Connector do
     # proves the seal rather than a property they had anyway.
     it 'leaves every registry writable until it is called' do
       aggregate_failures do
-        registries.each do |registry|
+        templates.map(&:helpers_definition).each do |registry|
           expect(registry).not_to be_frozen
           expect(registry.proc_helpers_by_name).not_to be_frozen
         end
@@ -486,22 +501,113 @@ describe IPaaS::Connector do
     it 'seals the registry of a connector that declared nothing' do
       bare = IPaaS::Connector::Connector.new('bare-owner') { name 'Bare' }
 
-      bare.seal_helpers!
+      bare.seal!
 
       expect(bare.helpers_definition).to be_frozen
       expect { bare.helper(:planted) { 'planted' } }.to raise_error(FrozenError, /sealed/)
+      expect(bare.proc_validations).not_to be_frozen
     end
 
     it 'refuses a helper planted on any template in the sealed graph' do
-      built.seal_helpers!
-
-      owners = [built, built.inbound_connection, built.outbound_connection, built.trigger('t'),
-                built.action('a'),]
+      built.seal!
 
       aggregate_failures do
-        owners.each do |owner|
+        templates.each do |owner|
           expect { owner.helper(:planted) { 'planted' } }.to raise_error(FrozenError, /sealed/)
         end
+      end
+    end
+
+    # Contrast case for the refusals below: unsealed, an expression plants a template on the connector.
+    it 'lets an expression define an action on a connector that was never sealed' do
+      resolved = run_expression(built.action('a').action, "connector.action('planted') { name 'Planted' }; nil")
+
+      expect(resolved.errors.full_messages).to be_empty
+      expect(built.actions.map(&:name)).to eq(['Action one', 'Planted'])
+    end
+
+    describe 'from a solution expression' do
+      let(:action) { built.action('a').action }
+      let(:trigger) { built.trigger('t').trigger }
+
+      before { built.seal! }
+
+      shared = '; it is shared by every solution on the connector'
+      recurrence = IPaaS::Connector::Types::RecurrenceType.schema
+      {
+        'adds a field to an action template' => [
+          "action_template.input_schema.field(:evil, 'Evil', :string)", 'Array',
+          -> { built.action('a').input_schema.fields.map(&:id) }, [:plain, :when, :start],
+        ],
+        'adds a field to a trigger template' => [
+          "trigger_template.output_schema.field(:evil, 'Evil', :string)", 'Array',
+          -> { built.trigger('t').output_schema.fields.map(&:id) }, [:event, :deduplication_id],
+        ],
+        'adds a field to a connection template' => [
+          "connector.outbound_connection.config_schema.field(:evil, 'Evil', :string)", 'Array',
+          -> { built.outbound_connection.config_schema.fields.map(&:id) }, [:host, :proxy_server, :api_key],
+        ],
+        "relabels a recurrence's own field, shared by every connector" => [
+          "input_schema.field(:when).fields.first.label = 'PWNED'", "IPaaS::Connector::Schema::Field#{shared}",
+          -> { recurrence.fields.first.label }, 'Frequency',
+        ],
+        "shifts the zone of an action template's time default" => [
+          'action_template.input_schema.field(:start).default.utc', 'Time',
+          -> { built.action('a').input_schema.field(:start).default.utc_offset }, 7200,
+        ],
+        'regenerates an action template schema' => [
+          'action_template.regenerate_schema(action_template.input_schema)', "IPaaS::Connector::Schema#{shared}",
+          -> { built.action('a').input_schema.fields.map(&:id) }, [:plain, :when, :start],
+        ],
+      }.each do |write, (source, refused, untouched, original)|
+        it "refuses one that #{write}, naming the class it refused" do
+          context = source.start_with?('trigger') ? trigger : action
+
+          message = run_expression(context, source).errors.full_messages.join
+
+          expect(message).to eq("Field 'probe' code raised FrozenError: can't modify frozen #{refused}")
+          expect(instance_exec(&untouched)).to eq(original)
+        end
+      end
+
+      it 'refuses one that defines a template, also on a copy, leaving no template registered' do
+        resolved = [
+          run_expression(action, "connector.action('planted') { name 'Planted' }"),
+          run_expression(action, "connector.trigger('planted') { name 'Planted trigger' }"),
+          run_expression(action, "connector.deep_dup.action('planted') { name 'Planted' }"),
+          run_expression(action, 'connector.inbound_connection { nil }'),
+          run_expression(action, 'connector.outbound_connection { nil }'),
+        ]
+
+        expect(resolved.map { |r| r.errors.full_messages.join })
+          .to all(include('cannot be defined; this connector is sealed'))
+        expect([built.actions.size, built.triggers.size]).to eq([1, 1])
+        expect([IPaaS::Connector::ActionTemplate.by_uuid('planted'), IPaaS::Connector::TriggerTemplate.by_uuid('planted')])
+          .to eq([nil, nil])
+      end
+
+      # A uuid already registered elsewhere is no exception: built in a scope that lacks it, the template would
+      # otherwise join this connector.
+      it 'refuses one that redefines an existing action from a scope where its uuid is not registered' do
+        resolved = IPaaS::Connector::Connector.uuid_scope({}) do
+          run_expression(action, "connector.action('a') { name 'Twin action' }")
+        end
+
+        expect(resolved.errors.full_messages.join).to include('cannot be defined; this connector is sealed')
+        expect(built.actions.map(&:name)).to eq(['Action one'])
+      end
+
+      # Contrast case for the refusals above: the same writes on the solution's own copies go through.
+      it "lets one change the solution's own action" do
+        resolved = run_expression(action, <<~RUBY)
+          input_schema.field(:own, 'Own', :string)
+          input_schema.field(:plain).label = 'Mine'
+        RUBY
+
+        expect(resolved.errors.full_messages).to be_empty
+        expect(action.input_schema.fields.map(&:id)).to include(:own)
+        expect(action.input_schema.field(:plain).label).to eq('Mine')
+        expect(built.action('a').input_schema.fields.map(&:id)).to eq([:plain, :when, :start])
       end
     end
   end

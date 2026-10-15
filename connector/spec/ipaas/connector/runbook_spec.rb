@@ -646,6 +646,47 @@ describe IPaaS::Connector::Runbook do
         end.to raise_error("Runbook variable '#{long_id}': Id is too long (maximum is 256 characters)")
       end
 
+      context 'with a value that contains itself or nests too deeply' do
+        let(:max_depth) { IPaaS::Connector::Mapping::NestingCheck::MAX_DEPTH }
+
+        before do
+          runbook.runbook_variables.first.type = :any
+          runbook.job_state = ActiveSupport::Cache::MemoryStore.new
+        end
+
+        def hashes(levels)
+          (1..levels).reduce(1) { |inner, _| { 'a' => inner } }
+        end
+
+        it 'rejects a value that contains itself without writing it' do
+          value = { 'a' => 1 }
+          value['self'] = value
+          expect { runbook.write_variable('foo', value) }.to raise_error(
+            "Runbook variable 'foo': Value Field 'foo' contains itself: an array or hash in its value includes itself.",
+          )
+          expect(runbook.read_variable('foo')).to be_nil
+        end
+
+        it 'rejects a value far too deep to walk recursively without writing it' do
+          value = hashes(max_depth * 10)
+          writer = Thread.new do
+            Thread.current.report_on_exception = false
+            runbook.write_variable('foo', value)
+          end
+          expect { writer.join }.to raise_error(
+            "Runbook variable 'foo': Value Field 'foo' is nested too deeply: " \
+            "its value goes more than #{max_depth - 1} levels deep.",
+          )
+          expect(runbook.read_variable('foo')).to be_nil
+        end
+
+        it 'writes a value nested as deeply as the field allows' do
+          value = hashes(max_depth - 1)
+          runbook.write_variable('foo', value)
+          expect(runbook.read_variable('foo')).to eq(value)
+        end
+      end
+
       it 'validates the value is of the correct type' do
         foo_field = runbook.runbook_variables.first
         foo_field.type = :integer

@@ -169,6 +169,17 @@ describe IPaaS::Connector::Common::UnresolvedNode do
       expect { Timeout.timeout(5) { described_class.within?(tree) } }.not_to raise_error
     end
 
+    it 'walks nesting deeper than a recursive walk survives' do
+      node = unresolved_node
+      with_node = (1..10_000).reduce([node]) { |inner, _| [inner] }
+      without_node = (1..10_000).reduce([1]) { |inner, _| [inner] }
+
+      expect(Thread.new { [described_class.within?(with_node), described_class.all_within(with_node)] }.value)
+        .to eq([true, [node]])
+      expect(Thread.new { [described_class.within?(without_node), described_class.all_within(without_node)] }.value)
+        .to eq([false, []])
+    end
+
     it 'finds every placeholder when it has to collect them all' do
       first = unresolved_node('one')
       second = unresolved_node('two')

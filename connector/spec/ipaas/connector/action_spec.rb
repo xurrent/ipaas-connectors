@@ -128,6 +128,56 @@ describe IPaaS::Connector::Action do
     )
   end
 
+  let(:max_depth) { IPaaS::Connector::Mapping::NestingCheck::MAX_DEPTH }
+  let(:contains_itself) { "Field 'data' contains itself: an array or hash in its value includes itself." }
+
+  let(:value_action) do
+    skip_function_capture_validation
+    IPaaS::Connector::Connector.new('value-output-connector') do
+      action 'value-output-action' do
+        name 'Value'
+        nested true
+
+        output_schema do
+          field :data, 'Data', :any
+          field :items, 'Items', :any, array: true
+        end
+
+        iteration_state_schema do
+          field :data, 'Data', :any
+        end
+
+        run do
+          []
+        end
+      end
+    end
+    IPaaS::Connector::Action.parse(
+      runbook,
+      { reference: 'value_action', description: 'Value', action_template: { uuid: 'value-output-action' } },
+    )
+  end
+
+  def cyclic
+    list = ['a']
+    list << list
+  end
+
+  def hashes(levels)
+    (1..levels).reduce(1) { |inner, _| { 'a' => inner } }
+  end
+
+  def too_deep(levels)
+    "Field 'data' is nested too deeply: its value goes more than #{levels} levels deep."
+  end
+
+  def quiet_thread
+    Thread.new do
+      Thread.current.report_on_exception = false
+      yield
+    end
+  end
+
   context 'validation' do
     it 'should be valid' do
       expect(action).to be_valid
@@ -745,6 +795,69 @@ describe IPaaS::Connector::Action do
       expect(encryptor.decrypt(result.second[:output][:another])).to eq('barbie')
     end
 
+    context 'an output that contains itself or nests too deeply' do
+      let(:output_limit) { max_depth - IPaaS::Connector::Action::LOGGED_OUTPUT_NESTING }
+      let(:schema_reference) { value_action.output_schemas.first.reference }
+
+      def run_with(data)
+        value_action.run(-> { [{ schema_reference: schema_reference, output: { data: data } }] })
+      end
+
+      def output_error(message)
+        "Output [#{schema_reference}] invalid: #{message}"
+      end
+
+      def stored_output
+        runbook.action_output(value_action.reference, output_schema_reference: schema_reference)
+      end
+
+      it 'fails the run without storing the value that contains itself' do
+        expect { run_with(cyclic) }.to raise_error(IPaaS::Job::FailJob, output_error(contains_itself))
+        expect(stored_output).to be_nil
+      end
+
+      it 'fails the run without storing the value that is far too deep for the run log' do
+        expect { quiet_thread { run_with(hashes(max_depth * 10)) }.join }
+          .to raise_error(IPaaS::Job::FailJob, output_error(too_deep(output_limit)))
+        expect(stored_output).to be_nil
+      end
+
+      it 'fails the run on an output built the way a Ruby action builds it' do
+        output = {}.with_indifferent_access
+        output[:data] = []
+        output[:data] << output[:data]
+        expect { value_action.run(-> { [{ schema_reference: schema_reference, output: output }] }) }
+          .to raise_error(IPaaS::Job::FailJob, output_error(contains_itself))
+      end
+
+      it 'fails the run on an array output built the way a Ruby action builds it' do
+        output = {}.with_indifferent_access
+        output[:items] = [[]]
+        output[:items].first << output[:items].first
+        expect { value_action.run(-> { [{ schema_reference: schema_reference, output: output }] }) }
+          .to raise_error(IPaaS::Job::FailJob, output_error(contains_itself.sub("'data'", "'items'")))
+      end
+
+      it 'fails the run on an output built far too deep the way a Ruby action builds it' do
+        output = {}.with_indifferent_access
+        output[:data] = []
+        (max_depth * 10).times.reduce(output[:data]) { |inner, _| [].tap { |deeper| inner << deeper } }
+        run = -> { value_action.run(-> { [{ schema_reference: schema_reference, output: output }] }) }
+        expect { quiet_thread(&run).join }.to raise_error(IPaaS::Job::FailJob, output_error(too_deep(output_limit)))
+      end
+
+      it 'accepts an output at the deepest level that still serializes in the run log and rejects one more' do
+        results = run_with(hashes(output_limit))
+        expect { results.to_json }.not_to raise_error
+        deeper = results.deep_dup
+        deeper.first[:output]['data'] = { 'a' => deeper.first[:output]['data'] }
+        expect { deeper.to_json }.to raise_error(JSON::NestingError)
+        expect(stored_output).to be_present
+        expect { run_with(hashes(output_limit + 1)) }
+          .to raise_error(IPaaS::Job::FailJob, output_error(too_deep(output_limit)))
+      end
+    end
+
     context 'dynamic input in mapping' do
       let(:action) do
         @action ||= IPaaS::Connector::Action.parse(
@@ -1122,6 +1235,28 @@ describe IPaaS::Connector::Action do
       set_iteration_state_value(a, nil)
       expect(a.iteration_state).to be_nil
       expect(a.iteration_state_value).to be_nil
+    end
+
+    context 'with a value that contains itself or nests too deeply' do
+      let(:state_limit) { max_depth - IPaaS::Connector::Action::ITERATION_STATE_NESTING }
+      let(:invalid) { 'Iteration state content invalid: ' }
+
+      it 'rejects iteration state that contains itself' do
+        expect { set_iteration_state_value(value_action, { data: cyclic }) }
+          .to raise_error(IPaaS::Job::FailJob, invalid + contains_itself)
+      end
+
+      it 'accepts iteration state at the deepest level that still serializes where it is stored and rejects one more' do
+        set_iteration_state_value(value_action, { data: hashes(state_limit) })
+        expect { JSON.generate(value_action.iteration_state) }.not_to raise_error
+        expect { set_iteration_state_value(value_action, { data: hashes(state_limit + 1) }) }
+          .to raise_error(IPaaS::Job::FailJob, invalid + too_deep(state_limit))
+      end
+
+      it 'rejects iteration state far too deep to walk recursively' do
+        expect { quiet_thread { set_iteration_state_value(value_action, { data: hashes(max_depth * 10) }) }.join }
+          .to raise_error(IPaaS::Job::FailJob, invalid + too_deep(state_limit))
+      end
     end
 
     def set_iteration_state_value(action, value)

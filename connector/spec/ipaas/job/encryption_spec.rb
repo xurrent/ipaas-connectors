@@ -68,6 +68,62 @@ describe IPaaS::Job::Encryption do
       expect(foo[:quux]).to eq('quuxxy')
     end
 
+    it 'encrypts fields in a hash with indifferent access' do
+      schema.field :foo, 'Foo', :nested do
+        field :bar, 'Bar', :secret_string
+      end
+
+      context.encryptor = encryptor
+      result = context.send(:hash_with_encrypted_secrets, { foo: { bar: 'barry' } }.with_indifferent_access, schema)
+      expect(encryptor.decrypt(result[:foo][:bar])).to eq('barry')
+    end
+
+    context 'on a Ruby action output holding a value the field check will reject' do
+      let(:output) { {}.with_indifferent_access }
+
+      def encrypt_on_worker_thread
+        Thread.new do
+          Thread.current.report_on_exception = false
+          context.send(:hash_with_encrypted_secrets, output, schema)
+        end.value
+      end
+
+      it 'does not overflow on a value that contains itself' do
+        schema.field :data, 'Data', :any
+        output[:data] = []
+        output[:data] << output[:data]
+
+        expect { encrypt_on_worker_thread }.not_to raise_error
+      end
+
+      it 'does not overflow on a value nested far too deeply' do
+        schema.field :data, 'Data', :any
+        output[:data] = []
+        (IPaaS::Connector::Mapping::NestingCheck::MAX_DEPTH * 10).times.reduce(output[:data]) do |inner, _|
+          [].tap { |deeper| inner << deeper }
+        end
+
+        expect { encrypt_on_worker_thread }.not_to raise_error
+      end
+
+      it 'does not overflow on an array field whose element contains itself, though it rebuilds the array' do
+        schema.field :items, 'Items', :any, array: true
+        output[:items] = [[]]
+        output[:items].first << output[:items].first
+
+        expect { encrypt_on_worker_thread }.not_to raise_error
+      end
+
+      it 'hands the value on as it is, for the field check to reject' do
+        schema.field :data, 'Data', :any
+        output[:data] = []
+        output[:data] << output[:data]
+        data = output[:data]
+
+        expect(encrypt_on_worker_thread[:data]).to equal(data)
+      end
+    end
+
     it 'encrypts fields in arrays' do
       schema.field :foo, 'Foo', :nested, array: true do
         field :bar, 'Bar', :secret_string
