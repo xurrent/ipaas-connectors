@@ -11,6 +11,7 @@ This file is appended to manually as part of the publishing process; each entry 
 - An HTTP request with a body but no `Content-Type` is sent as `application/x-www-form-urlencoded`.
 
 ### Added
+- Jira Cloud connector, to create, update, search and transition issues, list an issue's available transitions, manage comments and attachments, look up and create users, and trigger on Jira events or by polling.
 - Microsoft Outlook connector: create and delete calendar events, and renew mail subscriptions from a scheduled action.
 
 ### Fixed
