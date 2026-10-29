@@ -141,6 +141,16 @@ describe IPaaS::Connector::Common::LoadRules::ConnectorShape do
       "A = ['x', :y, 1, 1.5, true, false, nil].freeze" => nil,
       'A = /plain/i' => nil,
       'A = 2 * 3' => nil,
+      'A = __FILE__' => "assigns 'A' a value that is not a constant expression",
+      'A = "x #{__FILE__}"' => "assigns 'A' a value that is not a constant expression",
+      'A = __LINE__ * 2' => "assigns 'A' a value that is not a constant expression",
+      'A = 2 * __LINE__' => "assigns 'A' a value that is not a constant expression",
+      'A = [__LINE__]' => "assigns 'A' a value that is not a constant expression",
+      'A = { a: __FILE__ }' => "assigns 'A' a value that is not a constant expression",
+      'A = __FILE__.freeze' => "assigns 'A' a value that is not a constant expression",
+      'A = [__FILE__].freeze' => "assigns 'A' a value that is not a constant expression",
+      'A = %w[__FILE__ __LINE__]' => nil,
+      'A = "#{1}__FILE__"' => nil,
       'A = IPaaS::Job::CompactHash' => nil,
       'A = IPaaS::Job::GraphQL::Schema' => nil,
       'A = [IPaaS::Job::Humanize]' => nil,
@@ -303,6 +313,34 @@ describe IPaaS::Connector::Common::LoadRules::ConnectorShape do
       expect(findings_for(source)).to eq(
         ["uses 'outbound_traffic', which is not part of the action vocabulary"],
       )
+    end
+  end
+
+  describe 'location keywords' do
+    # rubocop:disable-next Lint/InterpolationCheck
+    {
+      'name __FILE__' => "passes a non-literal argument to 'name'",
+      'name __LINE__' => "passes a non-literal argument to 'name'",
+      'name "x #{__FILE__}"' => "passes a non-literal argument to 'name'",
+      'name "x #{__LINE__}"' => "passes a non-literal argument to 'name'",
+      'name __FILE__.freeze' => "passes a non-literal argument to 'name'",
+      'description [__LINE__]' => "passes a non-literal argument to 'description'",
+      'description({ a: __FILE__ })' => "passes a non-literal argument to 'description'",
+      "name 'x'" => nil,
+      'name "x #{7}"' => nil,
+      "name <<~N.chomp\n      __FILE__\n    N" => nil,
+      'name "#{1}__FILE__"' => nil,
+      'description %w[__FILE__]' => nil,
+      "name '__FILE__'" => nil,
+    }.each do |statement, message|
+      it message.nil? ? "accepts `#{statement.lines.first.strip}`" : "refuses `#{statement}`: #{message}" do
+        expect(findings_for(with_connector_statement(statement))).to eq([message].compact)
+      end
+    end
+
+    it 'refuses a location keyword as the connector uuid' do
+      source = wrap("connector __FILE__ do\n    name 'My'\n  end")
+      expect(findings_for(source)).to eq(['declares the connector with something other than a single literal uuid'])
     end
   end
 

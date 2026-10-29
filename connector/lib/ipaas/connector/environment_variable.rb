@@ -15,10 +15,11 @@ module IPaaS
       validate :type_valid?
 
       class << self
-        def parse(yaml, resolve: true, tolerant: false)
-          hash = IPaaS::Connector::Common::Serializer.parse(yaml, with_uuid: true, tolerant: tolerant)
+        def parse(yaml, resolve: true, tolerant: false, name: nil)
+          hash = IPaaS::Connector::Common::Serializer.parse(yaml, with_uuid: true, tolerant: tolerant, name: name)
           raise IPaaS::Error, 'EnvironmentVariable must be a hash.' unless hash.is_a?(Hash)
-          hash = hash.deep_symbolize_keys
+          refuse_non_text_uuid!(hash)
+          hash = loaded_binary_as_text(hash).deep_symbolize_keys
 
           EnvironmentVariable.new(hash[:uuid]).tap do |var|
             copy_connection_values(var, hash)
@@ -27,8 +28,8 @@ module IPaaS
         end
 
         def copy_connection_values(var, hash)
-          var.name = hash[:name]
-          var.description = hash[:description]
+          var.name = loaded_text(hash[:name])
+          var.description = loaded_text(hash[:description])
           var.type = hash[:type]
         end
       end

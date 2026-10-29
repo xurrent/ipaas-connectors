@@ -16,6 +16,8 @@ module IPaaS
         AWS_CACHE_BUFFER_SECONDS = 300
         AWS_MIN_CACHE_SECONDS = 60
 
+        mattr_accessor :credentials_provider, instance_accessor: false
+
         def aws_account_id
           ENV.fetch('AWS_ACCOUNT_ID', 'Not available')
         end
@@ -147,9 +149,9 @@ module IPaaS
         def build_canonical_query(uri)
           return '' unless uri.query
 
-          query_params = CGI.parse(uri.query)
-          param_list = query_params.flat_map { |key, values| values.map { |value| [key, value] } }
-          param_list.sort.map { |key, value| "#{uri_escape(key)}=#{uri_escape(value)}" }.join('&')
+          URI.decode_www_form(uri.query, Encoding::BINARY)
+             .reject { |key, value| key.empty? && value.empty? }
+             .sort.map { |key, value| "#{uri_escape(key)}=#{uri_escape(value)}" }.join('&')
         end
 
         def build_signing_headers(uri, amz_date, content_type, credentials)
@@ -289,7 +291,7 @@ module IPaaS
         end
 
         def uri_escape(string)
-          URI.encode_www_form_component(string.to_s).gsub('+', '%20')
+          CGI.escape(string).gsub('+', '%20')
         end
 
         def standard_port?(uri)
@@ -305,12 +307,11 @@ module IPaaS
 
           return env_creds if env_creds[:access_key_id].present? && env_creds[:secret_access_key].present?
 
-          fetch_credentials_from_aws_sdk
+          fetch_credentials_from_provider
         end
 
-        def fetch_credentials_from_aws_sdk
-          creds = ::Aws::ECSCredentials.new.credentials
-
+        def fetch_credentials_from_provider
+          creds = IPaaS::Job::Outbound::AwsSigV4.credentials_provider&.credentials
           return {} unless creds
 
           {

@@ -192,6 +192,39 @@ describe IPaaS::Connector::Common::ProcHelper do
       ],
     },
     {
+      route: 'lifecycle blocks: END runs at process exit and keeps its run alive until then',
+      rejected: {
+        'END { 1 }; 2' => ["'END' not allowed."],
+        '[1].each { END { 1 } }' => ["'END' not allowed."],
+        'BEGIN { 1 }; 2' => ["'BEGIN' not allowed."],
+        'END { 1 }; END { 2 }; BEGIN { 3 }' => ["'END' not allowed.", "'BEGIN' not allowed."],
+      },
+      accepted: [
+        '[1].each { 1 }; 2',
+        "x = <<~END\n  a\nEND\nx",
+        "x = <<~END_OF_HINT\n  a\nEND_OF_HINT\nx",
+        "'END { 1 }'",
+        "x = <<~BEGIN\n  a\nBEGIN\nx",
+        "'BEGIN { 1 }'",
+      ],
+    },
+    {
+      route: 'location keywords: __FILE__ and __LINE__ read where the expression is evaluated',
+      rejected: {
+        '__FILE__' => ["Keyword '__FILE__' not allowed."],
+        '"x#{__FILE__}"' => ["Keyword '__FILE__' not allowed."], # rubocop:disable Lint/InterpolationCheck
+        '__LINE__' => ["Keyword '__LINE__' not allowed."],
+        '[__FILE__, __LINE__, __FILE__]' => ["Keyword '__FILE__' not allowed.", "Keyword '__LINE__' not allowed."],
+      },
+      accepted: [
+        "'__FILE__'",
+        '7',
+        '"#{params[:a]}__FILE__"', # rubocop:disable Lint/InterpolationCheck
+        '%w[__FILE__ __LINE__]',
+        '/__LINE__#{params[:a]}/', # rubocop:disable Lint/InterpolationCheck
+      ],
+    },
+    {
       route: 'IO subclasses inherit its class methods, so blocking IO alone leaves them reachable',
       rejected: {
         'Socket.read("/etc/passwd")' => [refused_path('Socket')],

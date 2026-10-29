@@ -168,7 +168,7 @@ module IPaaS
           def walk_connector_declaration(node)
             send_node = node.send_node
             unless send_node.receiver.nil? && send_node.method_name == :connector &&
-                   send_node.arguments.one? && send_node.arguments.first.str_type?
+                   send_node.arguments.one? && plain_str?(send_node.arguments.first)
               return refuse('declares the connector with something other than a single literal uuid')
             end
 
@@ -254,8 +254,18 @@ module IPaaS
           end
 
           def scalar_literal?(node)
+            return false if LocationKeyword.keyword?(node)
+
             SCALAR_LITERAL_TYPES.include?(node.type) ||
               node.true_type? || node.false_type? || node.nil_type?
+          end
+
+          def plain_str?(node)
+            node.str_type? && scalar_literal?(node)
+          end
+
+          def plain_int?(node)
+            node&.int_type? && scalar_literal?(node)
           end
 
           def literal_array?(node)
@@ -267,7 +277,7 @@ module IPaaS
           end
 
           def plain_regexp?(node)
-            node.children.all? { |child| child.str_type? || child.regopt_type? }
+            node.children.all? { |child| plain_str?(child) || child.regopt_type? }
           end
 
           def literal_pairs?(node)
@@ -280,13 +290,13 @@ module IPaaS
 
           def literal_interpolation?(node)
             node.children.all? do |child|
-              child.str_type? || (child.begin_type? && child.children.all? { |part| literal?(part) })
+              plain_str?(child) || (child.begin_type? && child.children.all? { |part| literal?(part) })
             end
           end
 
           def const_expr_interpolation?(node)
             node.children.all? do |child|
-              child.str_type? || (child.begin_type? && child.children.all? { |part| const_expr?(part) })
+              plain_str?(child) || (child.begin_type? && child.children.all? { |part| const_expr?(part) })
             end
           end
 
@@ -314,7 +324,7 @@ module IPaaS
           end
 
           def repeated_literal?(node)
-            node.receiver&.int_type? && node.arguments.one? && node.arguments.first.int_type?
+            plain_int?(node.receiver) && node.arguments.one? && plain_int?(node.arguments.first)
           end
 
           # Judged on the outermost node of the path: an inner node is a shorter path matching no

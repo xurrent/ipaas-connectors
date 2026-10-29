@@ -298,6 +298,91 @@ describe IPaaS::Job::Outbound::HTTP do
     end
   end
 
+  describe 'default Content-Type' do
+    let(:received_requests) { [] }
+
+    before do
+      stub_request(:post, EXAMPLE_SERVER).with { |request| received_requests << request }.to_return(body: 'ok')
+    end
+
+    it 'should send a body without a Content-Type as form-urlencoded, unchanged' do
+      connection.http_post(EXAMPLE_SERVER, 'a=1')
+      expect(received_requests.sole.headers['Content-Type']).to eq('application/x-www-form-urlencoded')
+      expect(received_requests.sole.body).to eq('a=1')
+    end
+
+    it 'should keep the Content-Type the request names' do
+      connection.http_post(EXAMPLE_SERVER, '{"a":1}', { 'Content-Type' => 'application/json' })
+      expect(received_requests.sole.headers['Content-Type']).to eq('application/json')
+    end
+
+    it 'should send no Content-Type without a body' do
+      connection.http_post(EXAMPLE_SERVER)
+      expect(received_requests.sole.headers).not_to have_key('Content-Type')
+    end
+
+    it 'should send a hash body without file parts as a form' do
+      connection.multipart_post(EXAMPLE_SERVER, { a: 'x' })
+      expect(received_requests.sole.headers['Content-Type']).to eq('application/x-www-form-urlencoded')
+      expect(received_requests.sole.body).to eq('a=x')
+    end
+
+    context 'when authenticate adds a request middleware' do
+      let(:json_connector) do
+        IPaaS::Connector::Connector.new("json-auth-#{SecureRandom.hex(4)}") do
+          outbound_connection do
+            authenticate do |request|
+              request.request :json
+            end
+          end
+        end
+      end
+      let(:json_connection) do
+        IPaaS::Connector::Connection.parse(
+          { uuid: 'json_connection_uuid', direction: 'outbound', name: 'json connection',
+            connector: { uuid: json_connector.uuid }, },
+        )
+      end
+
+      it 'should leave the Content-Type of a body without one to that middleware' do
+        json_connection.http_post(EXAMPLE_SERVER, '{"a":1}')
+        expect(received_requests.sole.headers['Content-Type']).to eq('application/json')
+      end
+    end
+
+    context 'when authenticate sends a request through the connection' do
+      let(:token_connector) do
+        IPaaS::Connector::Connector.new("token-auth-#{SecureRandom.hex(4)}") do
+          outbound_connection do
+            authenticate do |request|
+              request.post("#{EXAMPLE_SERVER}/token", 'grant_type=client_credentials')
+            end
+          end
+        end
+      end
+      let(:token_connection) do
+        IPaaS::Connector::Connection.parse(
+          { uuid: 'token_connection_uuid', direction: 'outbound', name: 'token connection',
+            connector: { uuid: token_connector.uuid }, },
+        )
+      end
+
+      it 'should send both bodies without a Content-Type as form-urlencoded' do
+        stub_request(:post, "#{EXAMPLE_SERVER}/token").with { |request| received_requests << request }
+        token_connection.http_post(EXAMPLE_SERVER, 'a=1')
+        expect(received_requests.map { |request| [request.uri.path, request.headers['Content-Type']] })
+          .to eq([['/token', 'application/x-www-form-urlencoded'], ['/', 'application/x-www-form-urlencoded']])
+      end
+
+      it 'should keep the Content-Type the request names' do
+        stub_request(:post, "#{EXAMPLE_SERVER}/token").with { |request| received_requests << request }
+        token_connection.http_post(EXAMPLE_SERVER, '{"a":1}', { 'Content-Type' => 'application/json' })
+        expect(received_requests.map { |request| [request.uri.path, request.headers['Content-Type']] })
+          .to eq([['/token', 'application/x-www-form-urlencoded'], ['/', 'application/json']])
+      end
+    end
+  end
+
   describe 'raw query parameters' do
     let(:raw) { IPaaS::Job::Outbound::HTTP.raw_param_value('a%3Bb') }
 
@@ -611,6 +696,99 @@ describe IPaaS::Job::Outbound::HTTP do
           end.to raise_error(IPaaS::Error, 'Body must be a string, found {bo: "dy"}. Consider adding `.to_s`.')
         end
       end
+    end
+  end
+
+  describe 'adapter and request logging' do
+    let(:io) { StringIO.new }
+    let(:logger) { Logger.new(io).tap { |l| l.formatter = ->(*, message) { "#{message}\n" } } }
+    let(:recording_adapter) do
+      Class.new(Faraday::Adapter::NetHttp) do
+        cattr_accessor :paths, default: []
+
+        def call(env)
+          paths << env.url.path
+          super
+        end
+      end
+    end
+    let(:auth_connector) do
+      IPaaS::Connector::Connector.new("adapter-spec-#{SecureRandom.hex(4)}") do
+        outbound_connection do
+          authenticate do |request|
+            request.request :authorization, 'Bearer', 'auth-token'
+            request.get("#{EXAMPLE_SERVER}/from-authenticate")
+          end
+        end
+      end
+    end
+    let(:auth_connection) do
+      IPaaS::Connector::Connection.parse(
+        {
+          uuid: 'auth_connection_uuid',
+          direction: 'outbound',
+          name: 'authenticating connection',
+          connector: { uuid: auth_connector.uuid },
+        },
+      )
+    end
+
+    around do |example|
+      original_adapter = IPaaS::Job::Outbound::HTTP.adapter
+      original_options = Faraday.default_adapter_options
+      example.run
+    ensure
+      IPaaS::Job::Outbound::HTTP.adapter = original_adapter
+      Faraday.default_adapter_options = original_options
+    end
+
+    before do
+      stub_const('RecordingAdapter', recording_adapter)
+      allow(IPaaS).to receive(:default_logger).and_return(logger)
+      stub_request(:get, /#{Regexp.escape(EXAMPLE_SERVER)}/o).to_return(body: 'ok')
+    end
+
+    def logged_lines
+      io.string.lines.filter_map do |line|
+        payload = JSON.parse(line)
+        payload if payload['event'] == 'outbound_http'
+      rescue JSON::ParserError
+        nil
+      end
+    end
+
+    it "should keep Faraday's default adapter and its default options when no adapter is configured" do
+      IPaaS::Job::Outbound::HTTP.adapter = nil
+      Faraday.default_adapter_options = { connection_tag: 'default-options' }
+      handler = connection.http_connection(EXAMPLE_SERVER).builder.adapter
+      expect(handler.klass).to eq(Faraday::Adapter.lookup_middleware(Faraday.default_adapter))
+      expect(handler.instance_variable_get(:@kwargs)).to eq(connection_tag: 'default-options')
+    end
+
+    it 'should use the configured adapter' do
+      IPaaS::Job::Outbound::HTTP.adapter = RecordingAdapter
+      expect(connection.http_get(EXAMPLE_SERVER).body).to eq('ok')
+      expect(RecordingAdapter.paths).to eq(['/'])
+    end
+
+    it 'should route a request made while authenticating through the configured adapter and the log' do
+      IPaaS::Job::Outbound::HTTP.adapter = RecordingAdapter
+      auth_connection.http_get("#{EXAMPLE_SERVER}/after")
+      expect(RecordingAdapter.paths).to eq(['/from-authenticate', '/after'])
+      expect(logged_lines.pluck('path')).to eq(['/from-authenticate', '/after'])
+    end
+
+    it 'should log the connector uuid and the redacted authorization added while authenticating' do
+      auth_connection.http_get("#{EXAMPLE_SERVER}/after")
+      line = logged_lines.last
+      expect(line).to include('path' => '/after', 'connector_uuid' => auth_connector.uuid)
+      expect(line['req_headers']['Authorization']).to match(/\A\[REDACTED len=\d+\]\z/)
+    end
+
+    it 'should not expose the adapter or context provider settings on a connection or middleware instance' do
+      expect(connection).not_to respond_to(:adapter)
+      expect(connection).not_to respond_to(:adapter=)
+      expect(IPaaS::Job::Outbound::LoggingMiddleware.new(nil)).not_to respond_to(:context_provider)
     end
   end
 end

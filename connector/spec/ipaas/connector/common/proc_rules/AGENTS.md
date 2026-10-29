@@ -61,14 +61,16 @@ there are five of those in the repo, a spec run from `connector/` would read a d
 does, and an upgrade touching one but not the other would leave the pin green. Do not "fix" this to
 read the file.
 
-The node pin cannot catch a bare target bump on its own — measured, targets 3.4/3.5/4.0 emit an
-identical node set because the parser gem knows no newer syntax yet. The version pin is what catches
-the upgrade; the node pin catches the gem later catching up to it. Both are needed.
+The node pin cannot catch a bare target bump on its own: 4.0's only new syntax (a line leading with
+`||`/`&&`/`and`/`or` continuing the previous one) parses to the existing `or`/`and` nodes, so apart from
+that source, targets 3.4 and 4.0 emit an identical node set. The corpus holds such a source, so it fails
+to parse below 4.0. The version pin is what catches the upgrade; the node pin catches a parser that emits
+a node type the rules were never reviewed against. Both are needed.
 
 Pins `ProcHelper::TARGET_RUBY_VERSION` to the running Ruby's major.minor, and pins the exact set of
 AST node types a fixed source corpus emits at that target. Any major or minor Ruby will trip the version pin;
-the node pin trips later, when the parser gem catches up to the new syntax. Re-review every rule against the
-changed node forms before re-pinning either.
+the node pin trips when the parser emits a node type the rules were never reviewed against. Re-review every
+rule against the changed node forms before re-pinning either.
 
 ## helpers_proxy_spec.rb (sibling, `spec/ipaas/connector/common/`)
 

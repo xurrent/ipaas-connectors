@@ -28,8 +28,9 @@ module IPaaS
       if const_defined?(:Rails) && const_defined?(:ENVx) && Rails.root
         return @solution_directory if @solution_directory
 
-        return @solution_directory = Rails.root.join(ENVx.SOLUTION_DATA_DIR).to_s
+        return @solution_directory = Rails.root.join(ENVx.SOLUTION_DATA_DIR).expand_path.to_s
       end
+
       'tmp/solutions'
     end
 
@@ -45,8 +46,8 @@ module IPaaS
     # Deeply immutable, for a constant whose value is shared for the life of the process and so
     # must not be modifiable by anything that runs later. Raises on a value it cannot make
     # immutable, such as a lock, or a proc whose self or captured objects are not shareable.
-    # All procs it accepts are isolated but it does not freeze them, so those still need freezing before passing.
-    # @param value [Object] the value a constant is about to be bound to (any contained procs should already be frozen)
+    # All procs it accepts are isolated and frozen, their instance variables included.
+    # @param value [Object] the value a constant is about to be bound to
     # @return [Object] that same value, made deeply immutable
     def make_shareable(value)
       Ractor.make_shareable(value)
@@ -77,6 +78,7 @@ require 'ipaas/connector/common/uuid_mixin'
 require 'ipaas/connector/common/source_lines'
 require 'ipaas/connector/common/solution_file_cache'
 require 'ipaas/connector/common/yaml_limits'
+require 'ipaas/connector/common/location_keyword'
 require 'ipaas/connector/common/proc_rules/proc_rule'
 require 'ipaas/connector/common/proc_rules/const_paths'
 require 'ipaas/connector/common/proc_rules/no_const_def_rule'
@@ -84,6 +86,7 @@ require 'ipaas/connector/common/proc_rules/no_shared_variable_access_rule'
 require 'ipaas/connector/common/proc_rules/no_method_def_rule'
 require 'ipaas/connector/common/proc_rules/no_safe_present_rule'
 require 'ipaas/connector/common/proc_rules/no_exec_rule'
+require 'ipaas/connector/common/proc_rules/no_location_keyword_rule'
 require 'ipaas/connector/common/proc_rules/no_rescue_exception_rule'
 require 'ipaas/connector/common/proc_rules/class_call_context'
 require 'ipaas/connector/common/proc_rules/valid_methods_rule'

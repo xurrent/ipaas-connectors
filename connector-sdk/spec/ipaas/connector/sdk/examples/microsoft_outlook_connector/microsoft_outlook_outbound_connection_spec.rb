@@ -1117,7 +1117,7 @@ describe 'Microsoft Outlook Connection', :outbound_connection, :microsoft_outloo
     it 'reports a message Microsoft answered nothing for as not moved' do
       expect(call_helper(:move_results, ['A'], { 'responses' => [] }))
         .to eq([{ message_id: 'A', new_message_id: nil, moved: false,
-                  error: 'Microsoft Graph returned no answer for this message.', }])
+                  error: 'Microsoft Graph returned no answer for this request.', }])
     end
 
     # The assertion: the ids that built the batch are the ids the answers are read back with, so an answer
@@ -1144,17 +1144,17 @@ describe 'Microsoft Outlook Connection', :outbound_connection, :microsoft_outloo
     end
   end
 
-  describe 'describe_move_failure' do
+  describe 'describe_batch_failure' do
     it 'quotes the status, the code and the message of one refused row' do
       refused = { 'status' => 400,
                   'body' => { 'error' => { 'code' => 'ErrorInvalidIdMalformed',
                                            'message' => 'Id is malformed.', } }, }
-      expect(call_helper(:describe_move_failure, refused))
+      expect(call_helper(:describe_batch_failure, refused))
         .to eq('Microsoft Graph returned HTTP 400 ErrorInvalidIdMalformed: Id is malformed.')
     end
 
     it 'names the status when a refused row carries no error object' do
-      expect(call_helper(:describe_move_failure, { 'status' => 500, 'body' => {} }))
+      expect(call_helper(:describe_batch_failure, { 'status' => 500, 'body' => {} }))
         .to eq('Microsoft Graph returned HTTP 500 : no error details')
     end
   end
@@ -1262,6 +1262,42 @@ describe 'Microsoft Outlook Connection', :outbound_connection, :microsoft_outloo
     it 'raises when the resource data is not an object' do
       expect { call_helper(:notification_message_id, { 'resourceData' => 'AAMk-1' }) }
         .to raise_error(IPaaS::Error, 'Microsoft Graph sent a change notification with no message id')
+    end
+  end
+
+  describe 'created_subscription' do
+    it 'reads the subscription out of the 201 a create is answered with, which parse_graph would refuse' do
+      answer = graph_response(201, { id: subscription_id, expirationDateTime: '2026-09-28T07:56:02Z' }.to_json)
+      expect(call_helper(:created_subscription, answer)['id']).to eq(subscription_id)
+    end
+
+    it 'takes a 200 carrying a subscription as a create that worked too' do
+      answer = graph_response(200, { id: subscription_id }.to_json)
+      expect(call_helper(:created_subscription, answer)['id']).to eq(subscription_id)
+    end
+
+    it 'fails the row when Microsoft answers a create with no subscription id, so no unusable id reaches the store' do
+      answer = graph_response(201, { expirationDateTime: '2026-09-28T07:56:02Z' }.to_json)
+      expect { call_helper(:created_subscription, answer) }
+        .to raise_error(IPaaS::Job::FailJob, /created a subscription with no subscription id. The next run removes it/)
+    end
+
+    it 'fails the row when the id Microsoft answers with is not a subscription id, which could never be renewed' do
+      answer = graph_response(201, { id: 'not-a-subscription-id' }.to_json)
+      expect { call_helper(:created_subscription, answer) }
+        .to raise_error(IPaaS::Job::FailJob, /created a subscription with no subscription id/)
+    end
+
+    it 'fails the job and names the endpoint check when Microsoft refuses the create' do
+      body = { error: { code: 'ValidationError',
+                        message: 'Subscription validation request failed.', } }.to_json
+      expect { call_helper(:created_subscription, graph_response(400, body)) }
+        .to raise_error(IPaaS::Job::FailJob, /checks that it can reach the trigger before it checks anything else/)
+    end
+
+    it 'fails the job when a create is answered with no body at all' do
+      expect { call_helper(:created_subscription, graph_response(201, nil)) }
+        .to raise_error(IPaaS::Job::FailJob, /returned a subscription that is not JSON/)
     end
   end
 

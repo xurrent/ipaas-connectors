@@ -173,6 +173,75 @@ describe IPaaS::Job::Outbound::AwsSigV4 do
     end
   end
 
+  describe 'AWS signing test suite' do
+    def test_suite_authorization(url)
+      connection.build_aws_signed_headers(
+        method: 'GET',
+        url: url,
+        payload: '',
+        credentials: { access_key_id: 'AKIDEXAMPLE', secret_access_key: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY' },
+        region: 'us-east-1',
+        service: 'service',
+        timestamp: Time.utc(2015, 8, 30, 12, 36, 0)
+      )['Authorization']
+    end
+
+    # aws-c-auth tests/aws-signing-test-suite/v4/get-vanilla-query-order-key-case
+    it 'signs the request with unordered query parameters' do
+      expect(test_suite_authorization('https://example.amazonaws.com/?Param2=value2&Param1=value1')).to end_with(
+        'Signature=b97d918cfa904a5beff61c982a1b6f458b799221646efd99d3219ec94cdf2500'
+      )
+    end
+
+    # aws-c-auth tests/aws-signing-test-suite/v4/get-vanilla-query-unreserved
+    it 'signs the request with unreserved characters in the query' do
+      unreserved = '-._~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+
+      expect(test_suite_authorization("https://example.amazonaws.com/?#{unreserved}=#{unreserved}")).to end_with(
+        'Signature=9c3e54bfcdf0b19771a7f523ee5669cdf59bc7cc0884027167c21bb143a40197'
+      )
+    end
+
+    # aws-c-auth tests/aws-signing-test-suite/v4/get-unreserved
+    it 'signs the request with unreserved characters in the path' do
+      unreserved = '-._~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+
+      expect(test_suite_authorization("https://example.amazonaws.com/#{unreserved}")).to end_with(
+        'Signature=07ef7494c76fa4850883e2b006601f940f8a34d404d0cfa977f52a65bbf5f24f'
+      )
+    end
+  end
+
+  describe 'canonical query' do
+    def canonical_query(query)
+      connection.send(:build_canonical_query, URI("https://sqs.us-east-1.amazonaws.com/?#{query}"))
+    end
+
+    it 'percent-encodes an asterisk' do
+      expect(canonical_query('a=*b')).to eq('a=%2Ab')
+    end
+
+    it 'leaves a tilde bare' do
+      expect(canonical_query('a=~b')).to eq('a=~b')
+    end
+
+    it 'keeps percent-encoded bytes that are not UTF-8' do
+      expect(canonical_query('a=%E9')).to eq('a=%E9')
+    end
+
+    it 'drops the empty pairs a leading or doubled separator leaves' do
+      expect(canonical_query('&b=2&&a=1')).to eq('a=1&b=2')
+    end
+
+    it 'gives a key without a value an empty value' do
+      expect(canonical_query('flag&a=1')).to eq('a=1&flag=')
+    end
+
+    it 'splits parameters on an ampersand only, not a semicolon' do
+      expect(canonical_query('a=1;b=2')).to eq('a=1%3Bb%3D2')
+    end
+  end
+
   describe '#aws_credentials_for_role' do
     let(:sts_response_xml) do
       <<~XML
@@ -313,6 +382,78 @@ describe IPaaS::Job::Outbound::AwsSigV4 do
       )
 
       expect(request_stub).to have_been_requested
+    end
+
+    context 'with platform credentials from a provider' do
+      let(:log) { StringIO.new }
+      let(:provider_credentials) do
+        double(:credentials, access_key_id: 'ASIAPROVIDER', secret_access_key: 'provider-secret',
+                             session_token: 'token')
+      end
+      let(:not_configured) { /\APlatform AWS credentials not configured/ }
+
+      def assume_role
+        connection.aws_credentials_for_role('arn:aws:iam::123456789012:role/TestRole', 'test-external-id', 'us-east-1')
+      end
+
+      before(:each) do
+        ENV.delete('AWS_ACCESS_KEY_ID')
+        ENV.delete('AWS_SECRET_ACCESS_KEY')
+        connection.logger = Logger.new(log)
+      end
+
+      after(:each) do
+        IPaaS::Job::Outbound::AwsSigV4.credentials_provider = nil
+      end
+
+      it 'without a provider raises not configured, logs nothing and calls no STS' do
+        expect { assume_role }.to raise_error(IPaaS::Error, not_configured)
+        expect(log.string).to eq('')
+        expect(WebMock).not_to have_requested(:get, /sts\.us-east-1\.amazonaws\.com/)
+      end
+
+      it "signs the STS call with a provider's credentials" do
+        IPaaS::Job::Outbound::AwsSigV4.credentials_provider = double(:provider, credentials: provider_credentials)
+        sts = stub_request(:get, %r{https://sts\.us-east-1\.amazonaws\.com/})
+              .with(headers: { 'Authorization' => /Credential=ASIAPROVIDER/, 'x-amz-security-token' => 'token' })
+              .to_return(status: 200, body: sts_response_xml)
+
+        expect(assume_role[:access_key_id]).to eq('ASIAIOSFODNN7EXAMPLE')
+        expect(sts).to have_been_requested
+      end
+
+      it 'raises not configured when the provider has no credentials' do
+        IPaaS::Job::Outbound::AwsSigV4.credentials_provider = double(:provider, credentials: nil)
+
+        expect { assume_role }.to raise_error(IPaaS::Error, not_configured)
+        expect(WebMock).not_to have_requested(:get, /sts\.us-east-1\.amazonaws\.com/)
+      end
+
+      it 'logs a raising provider and raises not configured' do
+        provider = double(:provider)
+        allow(provider).to receive(:credentials).and_raise(StandardError, 'metadata endpoint down')
+        IPaaS::Job::Outbound::AwsSigV4.credentials_provider = provider
+
+        expect { assume_role }.to raise_error(IPaaS::Error, not_configured)
+        expect(log.string).to include('Failed to fetch credentials via AWS SDK: metadata endpoint down')
+        expect(WebMock).not_to have_requested(:get, /sts\.us-east-1\.amazonaws\.com/)
+      end
+
+      it 'prefers ENV credentials over the provider' do
+        ENV['AWS_ACCESS_KEY_ID'] = 'AKIAIOSFODNN7EXAMPLE'
+        ENV['AWS_SECRET_ACCESS_KEY'] = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+        provider = double(:provider)
+        allow(provider).to receive(:credentials)
+        IPaaS::Job::Outbound::AwsSigV4.credentials_provider = provider
+        sts = stub_request(:get, %r{https://sts\.us-east-1\.amazonaws\.com/})
+              .with(headers: { 'Authorization' => /Credential=AKIAIOSFODNN7EXAMPLE/ })
+              .to_return(status: 200, body: sts_response_xml)
+
+        assume_role
+
+        expect(sts).to have_been_requested
+        expect(provider).not_to have_received(:credentials)
+      end
     end
   end
 

@@ -28,6 +28,8 @@ Especially important to review and highlight are edits to:
   accessors must stay off every method allow-list (a guard spec pins them); a wrong prefix depth
   silently judges connector blocks as the gem's, and a wrong String-proc file routes blocks born
   inside an expression into a connector's store instead of refusing them.
+- `LocationKeyword` (`KEYWORDS` and `of`) — read by `NoLocationKeywordRule` and by `ConnectorShape`,
+  so an edit changes what the loader refuses as well as what an expression may use
 
 A row on the list permits **reading** the path and calling what it lists, which takes two guards
 that are easy to lose in a refactor. Both are covered by specs that fail without them:

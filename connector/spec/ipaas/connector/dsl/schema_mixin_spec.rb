@@ -71,7 +71,7 @@ describe IPaaS::Connector::Dsl::SchemaMixin do
       schema :foo
     end.new
     foo_tester.foo do
-      instance_eval('"Hello World!"', __FILE__, __LINE__)
+      instance_eval('"Hello World!"') # rubocop:disable Style/EvalWithLocation
     end
     expect(foo_tester).to be_invalid
     expect(foo_tester.errors[:foo].first).to eq("Schema (foo) invalid: Method 'instance_eval' not allowed.")

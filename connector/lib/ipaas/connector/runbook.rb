@@ -25,6 +25,7 @@ module IPaaS
       attribute :name
       attribute :description
       SUPPORTED_CONCURRENCY_TYPES = [:per_runbook, :per_job_context_identifier].freeze
+      VARIABLE_TEXT_KEYS = [:label, :hint, :notice].freeze
       attribute :concurrency, type: Hash
 
       attribute :trigger, type: Trigger
@@ -40,10 +41,11 @@ module IPaaS
       validate :action_references_unique
 
       class << self
-        def parse(runbook, resolve: true, tolerant: false)
-          hash = IPaaS::Connector::Common::Serializer.parse(runbook, with_uuid: true, tolerant: tolerant)
+        def parse(runbook, resolve: true, tolerant: false, name: nil)
+          hash = IPaaS::Connector::Common::Serializer.parse(runbook, with_uuid: true, tolerant: tolerant, name: name)
           raise IPaaS::Error, 'Runbook must be a hash.' unless hash.is_a?(Hash)
-          hash = hash.deep_symbolize_keys
+          refuse_non_text_uuid!(hash)
+          hash = loaded_binary_as_text(hash).deep_symbolize_keys
 
           Runbook.new(hash[:uuid]).tap do |new_runbook|
             parse_concurrency(new_runbook, hash[:concurrency])
@@ -66,15 +68,23 @@ module IPaaS
 
         def parse_runbook_variables(runbook, vars)
           runbook.runbook_variables = vars.map do |var|
-            IPaaS::Connector::Types::SchemaFieldType.resolve(var)
+            IPaaS::Connector::Types::SchemaFieldType.resolve(loaded_variable(var))
           end
         end
 
         private
 
+        def loaded_variable(var)
+          return var unless var.is_a?(Hash)
+
+          loaded = var.merge(var.slice(*VARIABLE_TEXT_KEYS).transform_values { |value| loaded_text(value) })
+          loaded[:fields] = loaded[:fields].map { |field| loaded_variable(field) } if loaded[:fields].is_a?(Array)
+          loaded
+        end
+
         def copy_runbook_values(runbook, hash, resolve: true)
-          runbook.name = hash[:name]
-          runbook.description = hash[:description]
+          runbook.name = loaded_text(hash[:name])
+          runbook.description = loaded_text(hash[:description])
           if hash.key?(:trigger)
             runbook.trigger = IPaaS::Connector::Trigger.parse(runbook, hash[:trigger], resolve: resolve)
           end
@@ -277,11 +287,9 @@ module IPaaS
       end
 
       def update_connections_runbook_variable(id_was, new_id)
-        Solution.as_current(solution) do
-          IPaaS::Connector::Connection.all.each do |connection|
-            updated = connection.update_runbook_variable(id_was, new_id)
-            connection.save(validate: false) if updated
-          end
+        solution.connections.each do |connection|
+          updated = connection.update_runbook_variable(id_was, new_id)
+          connection.save(validate: false) if updated
         end
       end
 

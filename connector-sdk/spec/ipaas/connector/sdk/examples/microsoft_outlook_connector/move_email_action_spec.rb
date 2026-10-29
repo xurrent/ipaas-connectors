@@ -160,7 +160,7 @@ describe 'Microsoft Outlook Move Email Action', :action, :microsoft_outlook do
       results = run_action(move_input([message_id('01'), message_id('02')]))[:results]
       expect(results.last)
         .to eq({ 'message_id' => message_id('02'), 'new_message_id' => nil, 'moved' => false,
-                 'error' => 'Microsoft Graph returned no answer for this message.', })
+                 'error' => 'Microsoft Graph returned no answer for this request.', })
     end
   end
 
@@ -219,6 +219,12 @@ describe 'Microsoft Outlook Move Email Action', :action, :microsoft_outlook do
       stub_batch_body({ responses: { id: '0', status: 201 } }.to_json)
       expect { run_action(move_input([message_id('01')])) }
         .to raise_error(IPaaS::Error, 'Microsoft Graph returned a batch answer whose responses are not a list')
+    end
+
+    it 'raises when the batch answer holds a row that is not an object' do
+      stub_batch_body({ responses: [7] }.to_json)
+      expect { run_action(move_input([message_id('01')])) }
+        .to raise_error(IPaaS::Error, 'Microsoft Graph returned a batch answer with a response that is not an object')
     end
 
     # The assertion: a row can only answer a request this batch sent, and the ids are the connector's own.

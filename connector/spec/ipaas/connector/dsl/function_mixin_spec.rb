@@ -108,7 +108,7 @@ describe IPaaS::Connector::Dsl::FunctionMixin do
       test = Class.new(DslTester) do
         function :parse
       end.new
-      fn = -> { instance_eval('"Hello World!"', __FILE__, __LINE__) }
+      fn = -> { instance_eval('"Hello World!"') } # rubocop:disable Style/EvalWithLocation
       test.parse(&fn)
       test.parse.call # for 100% coverage
       expect(test).not_to be_valid

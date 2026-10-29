@@ -11,7 +11,7 @@ module IPaaS
 
         # This version is used as a baseline for allowed constructs/methods.
         # Change it only after a thorough review of its impact.
-        TARGET_RUBY_VERSION = 3.4
+        TARGET_RUBY_VERSION = 4.0
 
         # Upper bound on how deeply procs may nest during a single resolution.
         # A proc whose value depends on itself (e.g. a config field that reads

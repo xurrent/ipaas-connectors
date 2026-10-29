@@ -21,9 +21,10 @@ module IPaaS
       validate :actions_valid?
 
       class << self
-        def parse(test_case, resolve: true, tolerant: false)
-          hash = IPaaS::Connector::Common::Serializer.parse(test_case, with_uuid: true, tolerant: tolerant)
+        def parse(test_case, resolve: true, tolerant: false, name: nil)
+          hash = IPaaS::Connector::Common::Serializer.parse(test_case, with_uuid: true, tolerant: tolerant, name: name)
           raise IPaaS::Error, 'TestCase must be a hash.' unless hash.is_a?(Hash)
+          refuse_non_text_uuid!(hash)
           hash = hash.deep_symbolize_keys
 
           TestCase.new(hash[:uuid]).tap do |obj|
@@ -35,9 +36,9 @@ module IPaaS
         private
 
         def copy_test_case_values(obj, hash)
-          obj.name = hash[:name]
-          obj.description = hash[:description]
-          obj.runbook_uuid = hash[:runbook_uuid]
+          [:name, :description, :runbook_uuid].each do |attribute|
+            obj.public_send(:"#{attribute}=", loaded_text(hash[attribute]))
+          end
           obj.trigger = IPaaS::TestCase::Trigger.parse(hash[:trigger]) if hash.key?(:trigger)
           obj.actions = Array(hash[:actions]).map do |action|
             IPaaS::TestCase::Action.parse(action)

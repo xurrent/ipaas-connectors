@@ -80,7 +80,7 @@ module IPaaS
         end
 
         def copy_basic_attributes(action, hash)
-          action.description = hash[:description]
+          action.description = loaded_text(hash[:description])
           action.predecessor_action_reference = hash[:predecessor_action_reference]
           action.predecessor_output_schema_reference = hash[:predecessor_output_schema_reference]
         end

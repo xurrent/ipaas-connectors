@@ -104,6 +104,46 @@ describe IPaaS::Connector::Common::Serializer do
     end
   end
 
+  describe 'parsing with a name' do
+    it 'defaults the uuid to the base name of a .yaml or .yml name, as a file at that path would' do
+      expect(subject.class.parse('foo: baz', with_uuid: true, name: '/solution/runbooks/r-1.yaml'))
+        .to eq({ 'foo' => 'baz', 'uuid' => 'r-1' })
+      expect(subject.class.parse('foo: baz', with_uuid: true, name: '/solution/runbooks/r-2.yml'))
+        .to eq({ 'foo' => 'baz', 'uuid' => 'r-2' })
+    end
+
+    it 'defaults to a random uuid for a name that is not a YAML file, as without a name' do
+      named = subject.class.parse('foo: baz', with_uuid: true, name: '/solution/runbooks/r-1.txt')
+      unnamed = subject.class.parse('foo: baz', with_uuid: true)
+
+      expect([named['uuid'], unnamed['uuid']]).to all(match(/\A\h{8}-\h{4}-7\h{3}-\h{4}-\h{12}\z/))
+      expect(named['uuid']).not_to eq('r-1')
+    end
+
+    it 'keeps the uuid the content holds' do
+      expect(subject.class.parse("uuid: given\nfoo: baz", with_uuid: true, name: '/solution/runbooks/r-1.yaml'))
+        .to eq({ 'uuid' => 'given', 'foo' => 'baz' })
+    end
+
+    it 'does not default the uuid unless requested' do
+      expect(subject.class.parse('foo: baz', name: '/solution/runbooks/r-1.yaml')).to eq({ 'foo' => 'baz' })
+    end
+
+    it 'takes the uuid from the path of a file, not from the name' do
+      file = Tempfile.new(%w[my-file .yaml])
+      begin
+        file << 'foo: baz'
+        file.close
+
+        name = '/solution/runbooks/r-1.yaml'
+        parsed = File.open(file.path) { |f| subject.class.parse(f, with_uuid: true, name: name) }
+        expect(parsed).to eq({ 'foo' => 'baz', 'uuid' => File.basename(file.path, '.yaml') })
+      ensure
+        file.close!
+      end
+    end
+  end
+
   context 'a SecretString written by an older release' do
     let(:stored) do
       "---\n:id: :api_key\n:label: API Key\n:type: :secret_string\n" \

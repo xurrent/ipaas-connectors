@@ -744,4 +744,45 @@ describe IPaaS::Connector::Connection do
       expect(connection.config_schema.connector).to be(owner)
     end
   end
+
+  describe 'a connector that is not available' do
+    def parse_with(connector_hash)
+      IPaaS::Connector::Connection.parse(
+        { uuid: 'orphan_uuid', direction: :outbound, name: 'orphan connection', connector: connector_hash }.compact
+      )
+    end
+
+    it 'names the referenced connector uuid in its error' do
+      connection = parse_with({ uuid: 'unavailable-connector-id' })
+
+      expect(connection).not_to be_valid
+      expect(connection.errors[:connector]).to eq(["'unavailable-connector-id' is not available."])
+      expect(connection.missing_connector_uuid).to eq('unavailable-connector-id')
+    end
+
+    it 'reports a blank connector when the file references none' do
+      connection = parse_with(nil)
+
+      expect(connection).not_to be_valid
+      expect(connection.errors[:connector]).to eq(["can't be blank"])
+      expect(connection.missing_connector_uuid).to be_nil
+    end
+
+    it 'has no missing connector uuid when the connector is available' do
+      connection = parse_with({ uuid: connector.uuid })
+      connection.validate
+
+      expect(connection.errors[:connector]).to be_empty
+      expect(connection.missing_connector_uuid).to be_nil
+    end
+
+    it 'keeps the referenced connector uuid when serialized' do
+      expect(parse_with({ uuid: 'unavailable-connector-id' }).to_h[:connector])
+        .to eq({ uuid: 'unavailable-connector-id' })
+    end
+
+    it 'serializes no connector when the file references none' do
+      expect(parse_with(nil).to_h).not_to have_key(:connector)
+    end
+  end
 end

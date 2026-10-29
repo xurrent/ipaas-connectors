@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 # Two pins that make a Ruby upgrade loud instead of silent. `ProcessedSource` accepts a stale
-# target version without complaint (3.5 and 4.0 both parse today).
+# target version without complaint.
 # This spec notices when the interpreter moves past the pinned target and the rules start walking an AST
 # shape they were never reviewed against.
 describe IPaaS::Connector::Common::ProcHelper do
@@ -44,6 +44,7 @@ describe IPaaS::Connector::Common::ProcHelper do
     "/re\#{params[:a]}/i =~ 'x'",
     'begin; params[:a].to_s; rescue StandardError => e; e.message; ensure; nil; end',
     'raise "boom" if params[:a] && !params[:b] || params[:c]',
+    "params[:a]\n  || params[:b]\n  && params[:c]",
     'def foo(a, b = 1, *rest, k:, kw: 2, **opts, &blk); [a, b, rest, k, kw, opts, blk]; end',
     '->(v) { v.to_s }.call(1)',
     'lambda { |*| nil }',
@@ -101,6 +102,7 @@ describe IPaaS::Connector::Common::ProcHelper do
     it 'is the version production parses proc sources at' do
       expect(processed('[1, 2, 3].map { it * 2 }').ast.type).to eq(:itblock)
       expect(described_class.new(nil, '[1, 2, 3].map { it * 2 }')).to be_valid
+      expect(described_class.new(nil, "params[:a]\n  || params[:b]")).to be_valid
     end
   end
 

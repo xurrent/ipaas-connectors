@@ -76,7 +76,7 @@ module IPaaS
             Thread.current[SUBSTITUTION_KEY] == true
           end
 
-          def parse(value, with_uuid: false, tolerant: false)
+          def parse(value, with_uuid: false, tolerant: false, name: nil)
             case value
             when String, File
               load_yaml(value, tolerant)
@@ -84,7 +84,7 @@ module IPaaS
               value
             end.tap do |v|
               if with_uuid && v.is_a?(Hash) && !v.key?('uuid') && !v.key?(:uuid)
-                v['uuid'] = uuid_from_file(value) || SecureRandom.uuid_v7
+                v['uuid'] = uuid_from_name(value, name) || SecureRandom.uuid_v7
               end
             end
           end
@@ -135,10 +135,11 @@ module IPaaS
             UnresolvedNode.forget_checked_nodes!
           end
 
-          def uuid_from_file(value)
-            return unless value.is_a?(File) && value.path.end_with?('.yaml', '.yml')
+          def uuid_from_name(value, name)
+            path = value.is_a?(File) ? value.path : name
+            return unless path&.end_with?('.yaml', '.yml')
 
-            File.basename(value, '.*')
+            File.basename(path, '.*')
           end
         end
       end

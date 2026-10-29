@@ -461,6 +461,7 @@ describe 'Xurrent Webhook Trigger OIDC verification', :trigger do
           )
           allow(trigger).to receive(:outbound_connection).and_return(
             double('outbound_connection',
+                   connector: nil,
                    config: { environment: { stage: 'Prod', region: 'au' } }),
           )
         end
@@ -493,6 +494,7 @@ describe 'Xurrent Webhook Trigger OIDC verification', :trigger do
           )
           allow(trigger).to receive(:outbound_connection).and_return(
             double('outbound_connection',
+                   connector: nil,
                    config: { credentials: { account_id: outbound_account_id },
                              environment: { stage: 'Demo' }, }),
           )

@@ -3,9 +3,10 @@ require 'spec_helper'
 # Two pins that make a Ruby upgrade loud rather than silent, in the direction an allowlist can
 # actually drift. An unlisted node type is already refused by construction, so a *new* node type
 # needs no pin. What does need one is a new construct that desugars into a type the allowlist
-# names: `__FILE__` already arrives as `str` and `__LINE__` as `int`, so a future construct
-# reaching the same forms would be accepted with nobody reviewing it. The target version itself is
-# pinned to the running Ruby by the sibling `parser_target_drift_spec`, which asserts the same
+# names: `__FILE__` already arrives as `str` and `__LINE__` as `int`, refused only because
+# `LocationKeyword` names them, so a future construct reaching the same forms would be accepted
+# with nobody reviewing it. The target version itself is pinned to the running Ruby by the
+# sibling `parser_target_drift_spec`, which asserts the same
 # `ProcHelper::TARGET_RUBY_VERSION` this checker parses at.
 describe IPaaS::Connector::Common::LoadRules::ConnectorShape do
   def verdict(source)
@@ -39,9 +40,9 @@ describe IPaaS::Connector::Common::LoadRules::ConnectorShape do
       '::IPaaS::Job::CompactHash' => :accepted, '::IPaaS::Job::Solution' => :refused,
       '::File' => :refused,
       '{ h: IPaaS::Job::Humanize }' => :accepted,
-      # Literal by the time the checker sees them, and the reason this pin exists: a future
-      # construct reaching `str` or `int` the same way would be accepted unreviewed.
-      '__FILE__' => :accepted, '__LINE__' => :accepted,
+      # Literal by the time the checker sees them and refused by name, the reason this pin exists:
+      # a future construct reaching `str` or `int` the same way would be accepted unreviewed.
+      '__FILE__' => :refused, '__LINE__' => :refused,
       '__dir__' => :refused, '__method__' => :refused, 'defined?(x)' => :refused,
       'ENV' => :refused, 'DATA' => :refused, 'File' => :refused, 'Object' => :refused,
       'IPaaS::Job::Solution' => :refused,

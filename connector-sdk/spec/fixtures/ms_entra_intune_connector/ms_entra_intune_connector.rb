@@ -783,7 +783,12 @@ class MsEntraIntuneConnector < IPaaS::Connector::Definition
       { device_id: device_id }.tap do |h|
         all_fields.each do |field|
           field_schema = device_schema_fields.detect { |fs| fs.id.to_s.underscore == field.underscore }
-          value = field_schema.type == :secret_string ? device_hash[field].to_s : device_hash[field].presence
+          raw_value = device_hash[field]
+          value = case field_schema.type
+                  when :secret_string then raw_value.to_s
+                  when :boolean then raw_value
+                  else raw_value.presence
+                  end
           h[field.underscore.to_sym] = value
         end
       end

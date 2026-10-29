@@ -57,7 +57,7 @@ module IPaaS
         private
 
         def copy_trigger_values(trigger, hash)
-          trigger.description = hash[:description]
+          trigger.description = loaded_text(hash[:description])
           trigger.blueprint_checksum = hash[:blueprint_checksum]
           trigger.inbound_connection = IPaaS::Connector::Connection.by_uuid(hash.dig(:inbound_connection, :uuid))
           trigger.outbound_connection = IPaaS::Connector::Connection.by_uuid(hash.dig(:outbound_connection, :uuid))

@@ -14,6 +14,8 @@ module IPaaS
         extend ActiveSupport::Concern
         extend IPaaS::Connector::Common::ProcRules::ProcSafe
 
+        cattr_accessor :adapter, instance_accessor: false
+
         proc_safe :http_connection, :http_send,
                   :get, :post, :put, :delete, :head, :patch, :options, :trace,
                   :http_get, :http_post, :http_put, :http_delete, :http_head, :http_patch, :http_options, :http_trace,
@@ -34,9 +36,12 @@ module IPaaS
             conn = outbound_connection
             Faraday.new(url: uri, request: request_options, ssl: no_verification_in_development) do |request_builder|
               request_builder.request :multipart
+              request_builder.request :url_encoded
+              request_builder.use IPaaS::Job::Outbound::LoggingMiddleware, connector_uuid: conn&.connector&.uuid
+              request_builder.adapter IPaaS::Job::Outbound::HTTP.adapter if IPaaS::Job::Outbound::HTTP.adapter
               conn.authenticate_request(request_builder) unless skip_authentication
+              move_form_default_last(request_builder)
               request_builder.headers['User-Agent'] = 'Xurrent iPaaS'
-              request_builder.use IPaaS::Job::Outbound::LoggingMiddleware
             end
           end
 
@@ -95,6 +100,13 @@ module IPaaS
           end
 
           private
+
+          def move_form_default_last(request_builder)
+            return if request_builder.builder.locked?
+
+            request_builder.builder.delete(Faraday::Request::UrlEncoded)
+            request_builder.request :url_encoded
+          end
 
           def request_options(open_timeout:, timeout:, array_params:)
             {

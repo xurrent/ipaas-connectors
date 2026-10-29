@@ -10,6 +10,7 @@ module IPaaS
           NoExecRule,
           NoRescueExceptionRule,
           ValidMethodsRule,
+          NoLocationKeywordRule,
         ].freeze
 
         FIELD_RULES = [

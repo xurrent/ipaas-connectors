@@ -22,21 +22,22 @@ module IPaaS
       attribute :connector, type: Connector
       attribute :config_mapping, type: [IPaaS::Connector::Mapping::FieldMapping]
 
-      attr_accessor :solution
+      attr_accessor :solution, :connector_reference
       delegate :account_id, to: :solution, allow_nil: true
       attr_accessor :runbook # dynamic for runbook variables
 
       schema :config_schema # deep copy of connection template config schema
 
-      validates_presence_of :connector
+      validate :connector_available?
       validate :direction_valid?
       validate :config_mapping_valid?
 
       class << self
-        def parse(connection, resolve: true, tolerant: false)
-          hash = IPaaS::Connector::Common::Serializer.parse(connection, with_uuid: true, tolerant: tolerant)
+        def parse(connection, resolve: true, tolerant: false, name: nil)
+          hash = IPaaS::Connector::Common::Serializer.parse(connection, with_uuid: true, tolerant: tolerant, name: name)
           raise IPaaS::Error, 'Connection must be a hash.' unless hash.is_a?(Hash)
-          hash = hash.deep_symbolize_keys
+          refuse_non_text_uuid!(hash)
+          hash = loaded_binary_as_text(hash).deep_symbolize_keys
 
           Connection.new(hash[:uuid]).tap do |new_connection|
             copy_connection_values(new_connection, hash)
@@ -47,10 +48,11 @@ module IPaaS
         private
 
         def copy_connection_values(connection, hash)
-          connection.name = hash[:name]
+          connection.name = loaded_text(hash[:name])
           connection.direction = IPaaS::Connector::Common::UnresolvedNode.symbolize(hash[:direction])
-          connection.description = hash[:description]
-          connection.connector = IPaaS::Connector.by_uuid(hash.dig(:connector, :uuid))
+          connection.description = loaded_text(hash[:description])
+          connection.connector_reference = hash.dig(:connector, :uuid)
+          connection.connector = IPaaS::Connector.by_uuid(connection.connector_reference)
           connection.config_mapping = Array(hash[:config_mapping]).map do |cm|
             IPaaS::Connector::Mapping::FieldMapping.parse(cm)
           end
@@ -61,7 +63,9 @@ module IPaaS
 
       def to_h
         IPaaS::Connector::Common::Serializer.to_h(self, :uuid, :name, :direction, :description, :connector,
-                                                  :config_mapping)
+                                                  :config_mapping).tap do |hash|
+          hash[:connector] = { uuid: missing_connector_uuid } if missing_connector_uuid
+        end
       end
 
       def to_h_ref
@@ -156,7 +160,18 @@ module IPaaS
         connector&.send(:"#{direction}_connection")
       end
 
+      def missing_connector_uuid
+        connector_reference.presence unless connector
+      end
+
       private
+
+      def connector_available?
+        return if connector
+        return errors.add(:connector, :blank) unless missing_connector_uuid
+
+        errors.add(:connector, "'#{missing_connector_uuid}' is not available.")
+      end
 
       def outbound_setup_info
         connection_definition.call_function(:setup_info, self)

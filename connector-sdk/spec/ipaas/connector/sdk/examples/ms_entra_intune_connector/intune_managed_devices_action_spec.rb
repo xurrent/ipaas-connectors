@@ -340,6 +340,29 @@ describe 'Microsoft Intune Managed Devices Action', :action do
         expect(action.decrypt_secret_string(second_device[:user_principal_name])).to eq('')
       end
 
+      it 'keeps a false boolean' do
+        stub_request(:get, generate_expected_url)
+          .with(query: { '$top': 100 }.merge(expected_select))
+          .to_return(body: {
+            value: [
+              { id: 'off', azureADRegistered: false, isEncrypted: false },
+              { id: 'on', azureADRegistered: true, isEncrypted: true },
+              { id: 'absent' },
+            ],
+          }.to_json)
+
+        devices = trigger_action[:devices]
+        off_device = devices.find { |d| d[:device_id] == 'off' }
+        on_device = devices.find { |d| d[:device_id] == 'on' }
+        absent_device = devices.find { |d| d[:device_id] == 'absent' }
+        expect(off_device[:azure_ad_registered]).to eq(false)
+        expect(off_device[:is_encrypted]).to eq(false)
+        expect(on_device[:azure_ad_registered]).to eq(true)
+        expect(on_device[:is_encrypted]).to eq(true)
+        expect(absent_device[:azure_ad_registered]).to be_nil
+        expect(absent_device[:is_encrypted]).to be_nil
+      end
+
       it 'uses page_size' do
         stub = stub_request(:get, generate_expected_url)
                .with(query: { '$top': 55 }.merge(expected_select))

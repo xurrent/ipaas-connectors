@@ -30,6 +30,14 @@ module IPaaS
             report_keyword(:undef)
           end
 
+          def on_preexe(_node)
+            report_keyword(:BEGIN)
+          end
+
+          def on_postexe(_node)
+            report_keyword(:END)
+          end
+
           def report_method_definition(method)
             return if @methods_reported.include?(method)
 

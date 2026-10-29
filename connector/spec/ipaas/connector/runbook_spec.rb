@@ -1414,4 +1414,21 @@ describe IPaaS::Connector::Runbook do
       )
     end
   end
+
+  describe '#rename_runbook_variable' do
+    it 'saves, without validation, each connection of solution.connections that references the variable' do
+      runbook = IPaaS::Connector::Runbook.new(SecureRandom.uuid_v7)
+      runbook.actions = []
+      referencing = double(:referencing_connection, save: true)
+      other = double(:other_connection, save: true)
+      allow(referencing).to receive(:update_runbook_variable).with('old-id', 'new-id').and_return(true)
+      allow(other).to receive(:update_runbook_variable).with('old-id', 'new-id').and_return(false)
+      runbook.solution = double(:solution, connections: [referencing, other], test_cases_for: [])
+
+      runbook.rename_runbook_variable('old-id', 'new-id')
+
+      expect(referencing).to have_received(:save).with(validate: false)
+      expect(other).not_to have_received(:save)
+    end
+  end
 end

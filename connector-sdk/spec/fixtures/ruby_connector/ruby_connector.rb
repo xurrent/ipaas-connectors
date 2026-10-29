@@ -8,7 +8,7 @@ class RubyConnector < IPaaS::Connector::Definition
 
       ## Prerequisites
       - Familiarity with Ruby syntax and with the allowed methods listed under the **Evaluate Ruby Code** action.
-      - Knowledge of the [Ruby 3.4 standard library](https://docs.ruby-lang.org/en/3.4/) and the [ActiveSupport 8.1 core extensions](https://guides.rubyonrails.org/v8.1/active_support_core_extensions.html) the allowlist draws from.
+      - Knowledge of the [Ruby 4.0 standard library](https://docs.ruby-lang.org/en/4.0/) and the [ActiveSupport 8.1 core extensions](https://guides.rubyonrails.org/v8.1/active_support_core_extensions.html) the allowlist draws from.
 
       ## Authentication
       None. This connector runs entirely in-process and requires no credentials.
@@ -84,7 +84,7 @@ class RubyConnector < IPaaS::Connector::Definition
       | Time | `Time.now`, `Time.current`, `Time.parse`, `utc`, `to_datetime`, `iso8601`, `zone`, `ago`, `at` |
       | XML | `text`, `at_xpath` |
 
-      Calling anything outside the allowlist (including `eval`, `system`, `exec`, `require`, `instance_eval`, method / constant definitions, direct instance / class / global variables) is rejected at validation time with `Method '<name>' not allowed.`. The `alias` and `undef` keywords are rejected with `'alias' not allowed.` / `'undef' not allowed.`.
+      Calling anything outside the allowlist (including `eval`, `system`, `exec`, `require`, `instance_eval`, method / constant definitions, direct instance / class / global variables) is rejected at validation time with `Method '<name>' not allowed.`. The `alias`, `undef`, `BEGIN` and `END` keywords are rejected with `'alias' not allowed.`, `'undef' not allowed.`, `'BEGIN' not allowed.` and `'END' not allowed.`.
 
       `to_json` takes no arguments: call it bare (`value.to_json`). Passing options or a block, or `:to_json` as a symbol (`&:to_json`, `reduce(:to_json)`), is rejected with `'to_json' takes no arguments and cannot be passed as a symbol.`; write `map { |v| v.to_json }` instead of `map(&:to_json)`.
 
@@ -180,9 +180,9 @@ class RubyConnector < IPaaS::Connector::Definition
       Long-running scripts are subject to the surrounding job runner's limits. This means a Ruby action must complete within 90 seconds.
 
       ## References
-      - [Ruby 3.4 standard library](https://docs.ruby-lang.org/en/3.4/)
+      - [Ruby 4.0 standard library](https://docs.ruby-lang.org/en/4.0/)
       - [ActiveSupport 8.1 core extensions](https://guides.rubyonrails.org/v8.1/active_support_core_extensions.html)
-      - [Time](https://docs.ruby-lang.org/en/3.4/Time.html)
+      - [Time](https://docs.ruby-lang.org/en/4.0/Time.html)
     END_OF_DESCRIPTION
 
     action 'da0f63d9-5281-4919-8613-3ec5554505ab' do
@@ -254,7 +254,7 @@ class RubyConnector < IPaaS::Connector::Definition
         | Time | `Time.now`, `Time.current`, `Time.parse`, `utc`, `to_datetime`, `iso8601`, `zone`, `ago`, `at` |
         | XML | `text`, `at_xpath` |
 
-        Calling anything outside the allowlist (including `eval`, `system`, `exec`, `require`, `instance_eval`, method / constant definitions, direct instance / class / global variables) is rejected at validation time with `Method '<name>' not allowed.`. The `alias` and `undef` keywords are rejected with `'alias' not allowed.` / `'undef' not allowed.`.
+        Calling anything outside the allowlist (including `eval`, `system`, `exec`, `require`, `instance_eval`, method / constant definitions, direct instance / class / global variables) is rejected at validation time with `Method '<name>' not allowed.`. The `alias`, `undef`, `BEGIN` and `END` keywords are rejected with `'alias' not allowed.`, `'undef' not allowed.`, `'BEGIN' not allowed.` and `'END' not allowed.`.
 
         `to_json` takes no arguments: call it bare (`value.to_json`). Passing options or a block, or `:to_json` as a symbol (`&:to_json`, `reduce(:to_json)`), is rejected with `'to_json' takes no arguments and cannot be passed as a symbol.`; write `map { |v| v.to_json }` instead of `map(&:to_json)`.
 

@@ -31,6 +31,44 @@ module IPaaS
       module AttributeMixin
         extend ActiveSupport::Concern
 
+        class_methods do
+          def loaded_text(value)
+            return value if value.nil? || value.is_a?(IPaaS::Connector::Common::UnresolvedNode)
+
+            text = String(value.to_s)
+            return text if text.encoding != Encoding::BINARY && text.valid_encoding?
+
+            text.dup.force_encoding(Encoding::UTF_8).scrub
+          end
+
+          def loaded_binary_as_text(value)
+            case value
+            when Hash then value.to_h { |key, inner| [loaded_binary_as_text(key), loaded_binary_as_text(inner)] }
+            when Array then value.map { |inner| loaded_binary_as_text(inner) }
+            when String then loaded_text(value)
+            when IPaaS::Encryption::SecretString
+              value.dup.tap { |secret| secret.encrypted = loaded_binary_as_text(secret.encrypted) }
+            else value
+            end
+          end
+
+          def refuse_non_text_uuid!(hash)
+            return unless [hash['uuid'], hash[:uuid]].any? { |uuid| non_text_uuid?(uuid) }
+
+            raise IPaaS::Error, 'UUID must be text.'
+          end
+
+          def non_text_uuid?(uuid)
+            case uuid
+            when Hash, Array then true
+            when String then uuid.encoding == Encoding::BINARY || !uuid.valid_encoding?
+            else false
+            end
+          end
+
+          private :loaded_text, :loaded_binary_as_text, :refuse_non_text_uuid!, :non_text_uuid?
+        end
+
         included do
           def self.attribute(name, default: nil, required: nil, format: nil, length: nil, type: String)
             attr_accessor(name) { default.dup }

@@ -2,7 +2,7 @@ $LOAD_PATH.push File.expand_path('lib', __dir__)
 require 'ipaas/connector/version'
 
 Gem::Specification.new do |s|
-  s.required_ruby_version = '>= 3.4'
+  s.required_ruby_version = '>= 4.0'
   s.name = 'ipaas-connector'
   s.version = IPaaS::Connector::VERSION
   s.platform = Gem::Platform::RUBY

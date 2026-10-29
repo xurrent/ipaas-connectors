@@ -97,12 +97,49 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
   MOVE_SUCCESS_STATUSES = [200, 201].freeze
   MESSAGE_ID_PATTERN    = /\A[A-Za-z0-9_=-]+\z/
 
+  EVENTS_PATH                = '/events'.freeze
+  CALENDARS_PATH             = '/calendars'.freeze
+  EVENT_CREATED_STATUS       = 201
+  EVENT_DELETED_STATUS       = 204
+  EVENT_GONE_STATUS          = 404
+  EVENT_GONE_CODE            = 'ErrorItemNotFound'.freeze
+  DUPLICATE_TRANSACTION_CODE = 'ErrorDuplicateTransactionId'.freeze
+  UNKNOWN_TIME_ZONE_CODE     = 'TimeZoneNotSupportedException'.freeze
+  REFUSED_PROPERTY_CODE      = 'ErrorPropertyValidationFailure'.freeze
+  MAX_GRAPH_ID_LENGTH        = 256
+  ATTENDEE_TYPE              = 'required'.freeze
+  WALL_TIME_PATTERN          = /\A(\d{4}-\d{2}-\d{2})[ T]([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.\d+)?)?\z/
+  WALL_TIME_CONVERSION       = "<value>.in_time_zone('Europe/Zurich').strftime('%Y-%m-%d %H:%M')".freeze
+  WALL_TIME_COLON_CAVEAT     = 'The conversion needs a colon in the time: it reads 08.00 as midnight.'.freeze
+  CALENDAR_PERMISSION_HINT   = 'Check that the app holds the Calendars.ReadWrite application permission for ' \
+                               'this mailbox.'.freeze
+  EVENT_MAY_EXIST_HINT       = 'Microsoft may have created the event before it failed, so look in the calendar ' \
+                               'before you run the step again, or map a Transaction ID.'.freeze
+
   SUBSCRIPTION_PATH           = '/subscriptions'.freeze
   SUBSCRIPTIONS_STORE_KEY     = 'subscriptions'.freeze
   SUBSCRIPTION_GONE_STATUSES  = [404].freeze
   SUBSCRIPTION_DELETED_STATUS = 204
   SUBSCRIPTION_ID_PATTERN     = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
   LIFECYCLE_EVENT_KEY         = 'lifecycleEvent'.freeze
+
+  SUBSCRIPTION_CHANGE_TYPE          = 'created'.freeze
+  MAX_SUBSCRIPTION_LIFETIME_MINUTES = 10_080
+  CLOCK_SKEW_MARGIN_MINUTES         = 30
+  RENEWAL_WINDOW_MINUTES            = 1440
+  MAX_SUBSCRIPTION_LIST_REQUESTS    = 10
+  SUBSCRIPTION_CREATED_STATUSES     = [200, 201].freeze
+  SUBSCRIPTION_RENEWED_STATUS       = 200
+  OUTCOME_CREATED                   = 'created'.freeze
+  OUTCOME_RENEWED                   = 'renewed'.freeze
+  OUTCOME_REMOVED                   = 'removed'.freeze
+  OUTCOME_SKIPPED                   = 'skipped'.freeze
+  OUTCOME_FAILED                    = 'failed'.freeze
+  TRANSIENT_SERVER_ERROR_STATUSES   = [500, 502, 503, 504].freeze
+  ROW_CHANGED_WHILE_ANSWERING       = 'The trigger changed while Microsoft was answering, so nothing was stored.'.freeze
+  NOTHING_RECORDED                  = 'No trigger records a subscription on this connection. A trigger records ' \
+                                      'on the Outlook connection it uses, so this step must use that connection.'.freeze
+  ADDRESS_KEY_PREFIX                = 'http'.freeze
 
   VALIDATION_TOKEN_PARAM      = 'validationToken'.freeze
   VALIDATION_ECHO_PREFIX      = 'graph-validation:'.freeze
@@ -116,7 +153,7 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
     avatar '/assets/icons/microsoft-outlook.svg'
     description <<~END_OF_DESCRIPTION
       ## Overview
-      Connects to Microsoft 365 mailboxes through the [Microsoft Graph API](https://learn.microsoft.com/en-us/graph/) to read email from user and shared mailboxes into Xurrent, and to send email as those mailboxes.
+      Connects to Microsoft 365 mailboxes through the [Microsoft Graph API](https://learn.microsoft.com/en-us/graph/) to read email from user and shared mailboxes into Xurrent, to send email as those mailboxes, and to create and delete events in their calendars.
 
       ## Prerequisites
       - A Microsoft Entra ID tenant with Exchange Online mailboxes.
@@ -128,6 +165,8 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
         - `Mail.Read`: read mail in every mailbox the app may reach.
         - `Mail.ReadWrite`: move and update mail.
         - `Mail.Send`: send mail as any mailbox.
+        - `Calendars.ReadWrite`: create and delete events in every calendar the app may reach.
+      - Grant only what the runbooks use. **Test** reads the inbox of the **Default mailbox**, so an app that holds `Calendars.ReadWrite` and no mail permission fails Test while its calendar actions work. Leave Default mailbox empty on such a connection, and name the mailbox on every step.
       - Optional: limit the app to chosen mailboxes with **RBAC for Applications in Exchange Online**. The Entra grant and the Exchange grant add up, so remove the tenant-wide Entra grant when a scope should apply.
 
       ## Authentication
@@ -143,7 +182,7 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
 
       **Permissions required**: `Mail.Read`
 
-      Deploying the solution records the mailbox and folder to watch on the connection, under the address of this trigger. Recording alone starts no delivery. The subscription is created, and then kept alive, by the Renew Subscriptions action: put that action in a runbook of its own, on a Scheduler trigger that runs every six days. After deploying or changing a New Email Received trigger, run the renewal runbook once by hand: until a run creates the subscription, the mailbox is not watched. A trigger that has gone quiet is repaired the same way: a run creates a subscription Microsoft no longer holds. Deprovision the trigger in the designer before you delete its runbook: deprovisioning deletes the subscription and its record, while deleting the runbook leaves both behind, and the renewal runbook keeps that subscription alive.
+      Deploying the solution records the mailbox and folder to watch on the connection, under the runbook of this trigger. Recording alone starts no delivery. The subscription is created, and then kept alive, by the Renew Subscriptions action: put that action in a runbook of its own, on a Scheduler trigger that runs every 15 minutes, and set that runbook's concurrency to one run at a time. Within 15 minutes of a deploy, or of a change to the mailbox or folder, a run creates the subscription, and a run renews it a day before Microsoft would end it. A trigger that has gone quiet is repaired the same way. Deprovision the trigger in the designer before you delete its runbook: deprovisioning deletes the subscription and its record, while deleting the runbook leaves both behind, and the renewal runbook keeps that subscription alive.
 
       Microsoft can deliver the same notification more than once, so a workflow that must act on a message exactly once checks the Message ID before it acts. An iPaaS outage long enough to time out deliveries makes Microsoft slow down or drop notifications to this endpoint for a while afterwards, and mail that arrives while deliveries are dropped is not delivered later.
 
@@ -274,11 +313,19 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
       - **Content bytes**: the file as base64 text, exactly as Microsoft sends it.
       - **Content type**: the media type of the file, such as application/pdf.
 
-      ## References
-      - [Get access without a user](https://learn.microsoft.com/en-us/graph/auth-v2-service)
-      - [Microsoft Graph permissions reference](https://learn.microsoft.com/en-us/graph/permissions-reference)
-      - [Register an application with Microsoft Entra](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app)
-      - [Role Based Access Control for Applications in Exchange Online](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-rbac)
+      ### Renew Subscriptions
+      Creates and keeps alive every Microsoft Graph subscription the triggers on this connection depend on, through the [subscription API](https://learn.microsoft.com/en-us/graph/api/resources/subscription).
+
+      **Permissions required**: the read permission of what is watched, `Mail.Read` for a mailbox folder
+
+      Microsoft ends a subscription after seven days unless it is renewed. Put this action in a runbook of its own, on a Scheduler trigger that runs every 15 minutes, and set that runbook's concurrency to one run at a time, so two runs never create the same subscription. Each run lists the subscriptions Microsoft holds for this application, deletes any that points at a trigger of this connection but is not recorded, creates the subscription of every recorded trigger that has none, and renews, in batches of 20, every subscription that ends within a day. So a trigger is watched within 15 minutes of its deploy, or of a change to its mailbox or folder, with no step by hand. A run with nothing to do ends quietly. A run in which a subscription could not be created or renewed fails after it has handled every other row, and its log names the trigger, what it watched and what Microsoft answered. The next run tries again. Use the Outlook connection the triggers use: a run on another connection finds nothing to keep alive. A Scheduler trigger keeps the recurrence it was first deployed with, so after changing it, deprovision and provision that trigger.
+
+      #### Input Parameters
+      None. The action reads the subscriptions the connection holds.
+
+      #### Output
+      - **Results**: one row per subscription the run touched, with **Runbook ID**, **Resource**, **Mailbox**, **Folder**, **Subscription ID**, **Expires at**, **Outcome** and **Error**. Outcome is `created`, `renewed`, `removed` for a subscription nobody recorded that the run deleted, or `skipped` for a trigger that changed while Microsoft was answering, with the reason in Error. A run in which a row failed ends with the failure instead of this output.
+      - **Created**, **Renewed**, **Removed**: how many rows ended with each outcome.
 
       ### Move Email
       Moves one or more messages into another folder of the same mailbox, through the [move message API](https://learn.microsoft.com/en-us/graph/api/message-move).
@@ -313,11 +360,52 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
       #### Output
       - **Results**: one row per message id that went in, and a repeated id comes back once. A row that worked carries the new message id and no error. A row that failed carries the error text and no new message id.
 
+      ### Create Calendar Event
+      Creates one event in a calendar of a mailbox, through the [create event API](https://learn.microsoft.com/en-us/graph/api/user-post-events). Microsoft sends an invitation to every attendee.
+
+      **Permissions required**: `Calendars.ReadWrite`
+
+      Start and End are the local date and time in the zone named in Time zone, such as `2026-12-01 08:00` in `W. Europe Standard Time`. Microsoft applies that zone's clock changes, so the time stays the same in winter and in summer. A Start that does not exist in the zone, such as 02:30 on the night the clocks go forward, is moved later by Microsoft without an error, and **Start** and **End** in the output show the time Microsoft stored. When the moved Start falls after End, Microsoft refuses the event.
+
+      A step that runs again creates a second event, unless it carries a **Transaction ID**. Microsoft remembers the Transaction ID of every event it holds: a second create with the same Transaction ID and the same values returns the event that exists, and one with different values fails. Map a value that is the same for one booking and different for the next one, such as the delivery id of the webhook that asked for the booking.
+
+      #### Input Parameters
+      - **Mailbox** (optional): the mailbox that owns the calendar and sends the invitations, as a user principal name, object id or SMTP address. Falls back to the connection's Default mailbox.
+      - **Calendar ID** (optional): the id of a calendar in the mailbox. Empty uses the default calendar of the mailbox. A read-only calendar, such as a holiday calendar, is refused by Microsoft.
+      - **Subject** (required): the title of the event.
+      - **Start** (required) and **End** (required): the local date and time, written `2026-12-01 08:00` or `2026-12-01T08:00:00`, with no offset and no `Z`. Convert a time that carries an offset first, such as `<value>.in_time_zone('Europe/Zurich').strftime('%Y-%m-%d %H:%M')`, and name the same zone in Time zone. The conversion takes an IANA name only, and it needs a colon in the time: it reads `08.00` as midnight. End may equal Start, and may not be earlier.
+      - **Time zone** (required): the zone of Start and End, as a Windows name such as `W. Europe Standard Time` or an IANA name such as `Europe/Zurich`.
+      - **Body** (optional) and **Body type** (optional, default `text`): the text of the event. `text` keeps the line breaks as typed, `html` reads the body as markup.
+      - **Location** (optional): **Display name**, **Street**, **Postal code** and **City**. Only the fields that hold a value are sent.
+      - **Attendees** (optional): the addresses that receive the invitation, all as required attendees.
+      - **Reminder minutes before start** (optional): turns the reminder on that many minutes before Start. Empty leaves the choice to Microsoft, which turns a 15 minute reminder on.
+      - **Transaction ID** (optional): a value that makes a repeated create return the existing event instead of a second one.
+
+      #### Output
+      - **Event ID**: the id that Delete Calendar Event takes.
+      - **Web link**, **iCal UID**, **Subject**, **Start** and **End** (each a date time and a time zone, as Microsoft stored them), **Organizer**, **Attendees**, **Location**, **Is reminder on**, **Reminder minutes before start**, **Created date time** and **Mailbox**.
+
+      ### Delete Calendar Event
+      Deletes one event from the mailbox, through the [delete event API](https://learn.microsoft.com/en-us/graph/api/event-delete). When the mailbox organised the event, Microsoft sends a cancellation to the attendees.
+
+      **Permissions required**: `Calendars.ReadWrite`
+
+      An event that Microsoft does not find in the mailbox passes with **Deleted** false, so a cancel that arrives twice does not fail the second time. Deleted false says only that this mailbox held no such event when the step asked: an earlier delete removed it, an earlier try of this same step removed it before Microsoft answered with a server error, or the Event ID was never in this mailbox. An empty Event ID fails the step, because there is nothing to delete.
+
+      #### Input Parameters
+      - **Event ID** (required): the Event ID that Create Calendar Event returned.
+      - **Mailbox** (optional): the mailbox that holds the event, as a user principal name, object id or SMTP address. Falls back to the connection's Default mailbox.
+
+      #### Output
+      - **Deleted**: true when this step deleted the event, false when the mailbox held no event with this id when the step asked.
+      - **Event ID** and **Mailbox**: what the step asked Microsoft to delete.
+
       ## References
       - [Get access without a user](https://learn.microsoft.com/en-us/graph/auth-v2-service)
       - [Microsoft Graph permissions reference](https://learn.microsoft.com/en-us/graph/permissions-reference)
       - [Register an application with Microsoft Entra](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app)
       - [Role Based Access Control for Applications in Exchange Online](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-rbac)
+      - [The date, time and time zone of an event](https://learn.microsoft.com/en-us/graph/api/resources/datetimetimezone)
 
     END_OF_DESCRIPTION
 
@@ -387,7 +475,7 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
 
         One subscription watches one named mailbox and one folder. Give a second mailbox, or a second folder, its own trigger. Leave URL postfix empty: Microsoft sends its notifications to one address, and deploying refuses a postfix.
 
-        Deploying the solution records the mailbox and folder to watch, and starts no delivery by itself. The Renew Subscriptions action, run on a Scheduler trigger every six days, creates the subscription and keeps it alive. After deploying or changing this trigger, run the renewal runbook once by hand: until a run creates the subscription, the mailbox is not watched. Deprovision the trigger before you delete its runbook, or the renewal runbook keeps its subscription alive. Microsoft can deliver the same notification twice, so a workflow that must act once checks the Message ID first.
+        Deploying the solution records the mailbox and folder to watch, and starts no delivery by itself. The Renew Subscriptions action, run on a Scheduler trigger every 15 minutes, creates the subscription within 15 minutes of a deploy or a change, and keeps it alive. Deprovision the trigger before you delete its runbook, or the renewal runbook keeps its subscription alive. Microsoft can deliver the same notification twice, so a workflow that must act once checks the Message ID first.
       END_OF_DESCRIPTION
 
       outbound_traffic true
@@ -417,21 +505,19 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
         mailbox = helpers.normalize_mailbox(trigger.config[:mailbox])
         folder = helpers.folder_for(trigger.config[:folder])
         resource = helpers.subscription_resource(mailbox, folder)
-        rows = helpers.subscription_rows
-        row = rows[trigger.endpoint] || {}
-        if row['resource'] != resource
-          helpers.delete_subscription(row)
-          row = {}
-        end
-        rows[trigger.endpoint] = row.merge('resource' => resource, 'mailbox' => mailbox, 'folder' => folder)
-        helpers.write_subscription_rows(rows)
+        row = helpers.own_row
+        changed = row['resource'] != resource || row.fetch('endpoint', trigger.endpoint) != trigger.endpoint
+        helpers.delete_subscription(row) if changed
+        watch = { 'resource' => resource, 'mailbox' => mailbox, 'folder' => folder, 'endpoint' => trigger.endpoint }
+        helpers.store_own_row(watch)
       end
 
       deprovision do
         fail_job!(URL_POSTFIX_REFUSED) if helpers.url_postfix_set
         rows = helpers.subscription_rows
-        helpers.delete_subscription(rows.delete(trigger.endpoint))
-        helpers.write_subscription_rows(rows)
+        helpers.delete_subscription(rows[trigger.runbook.uuid])
+        helpers.delete_subscription(rows[trigger.endpoint])
+        helpers.store_own_row(nil)
       end
 
       parse do |request|
@@ -439,7 +525,7 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
         token = helpers.validation_token(request)
         discard_trigger_event!("#{VALIDATION_ECHO_PREFIX}#{token}") if token.present?
 
-        row = helpers.subscription_rows[trigger.endpoint] || {}
+        row = helpers.own_row
         secret = row['client_state'].to_s
         expected = secret.present? ? decrypt_secret_string(secret) : ''
         batch = helpers.trusted_notifications(helpers.notifications(request.body&.read), expected)
@@ -1042,6 +1128,236 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
       end
     end
 
+    action '01a10f63-a1f8-7eac-b111-e7ac03240ed8' do
+      name 'Renew Subscriptions'
+      avatar '/assets/icons/microsoft-outlook.svg'
+
+      description <<~END_OF_DESCRIPTION
+        Creates and keeps alive every Microsoft Graph subscription the triggers on this connection depend on, through the [subscription API](https://learn.microsoft.com/en-us/graph/api/resources/subscription).
+
+        Microsoft ends a subscription after seven days unless it is renewed. Put this action in a runbook of its own, on a Scheduler trigger that runs every 15 minutes, and set that runbook's concurrency to one run at a time, so two runs never create the same subscription. Each run lists the subscriptions Microsoft holds for this application, deletes any that points at a trigger of this connection but is not recorded, creates the subscription of every recorded trigger that has none, and renews, in batches of 20, every subscription that ends within a day. So a trigger is watched within 15 minutes of its deploy, or of a change to its mailbox or folder, with no step by hand.
+
+        A run with nothing to do ends quietly. A run in which a subscription could not be created or renewed fails after it has handled every other row, and its log names the trigger, what it watched and what Microsoft answered. The next run tries again. Use the Outlook connection the triggers use: a run on another connection finds nothing to keep alive. A Scheduler trigger keeps the recurrence it was first deployed with, so after changing it, deprovision and provision that trigger.
+      END_OF_DESCRIPTION
+
+      output_schema do
+        field :results, 'Results', :nested, array: true do
+          field :runbook_id, 'Runbook ID', :string,
+                hint: 'The runbook whose trigger this subscription belongs to.'
+          field :resource, 'Resource', :string,
+                hint: 'What Microsoft watches for this subscription, as a Microsoft Graph resource path.'
+          field :mailbox, 'Mailbox', :string,
+                hint: 'The mailbox, for a subscription that watches one.'
+          field :folder, 'Folder', :string,
+                hint: 'The folder, for a subscription that watches one.'
+          field :subscription_id, 'Subscription ID', :string
+          field :expires_at, 'Expires at', :date_time
+          field :outcome, 'Outcome', :string,
+                required: true,
+                hint: "'created' when the subscription was made, 'renewed' when Microsoft extended it, 'removed' " \
+                      "when a subscription nobody recorded was deleted, 'skipped' when the trigger changed while " \
+                      'Microsoft was answering.'
+          field :error, 'Error', :string,
+                hint: 'Why a skipped row was left alone. Empty otherwise.'
+        end
+        field :created, 'Created', :integer, required: true
+        field :renewed, 'Renewed', :integer, required: true
+        field :removed, 'Removed', :integer, required: true
+      end
+
+      run do
+        if helpers.subscription_rows.empty?
+          log(NOTHING_RECORDED)
+          next [{ output: { created: 0, renewed: 0, removed: 0, results: [] } }]
+        end
+
+        held = helpers.held_subscriptions
+        rows = helpers.without_shadowed_rows(helpers.subscription_rows)
+        results = helpers.remove_unrecorded_subscriptions(rows, held)
+        unsubscribed = rows.reject { |_key, row| helpers.held_id(row, held) }
+        expiring = rows.select { |_key, row| helpers.held_id(row, held) && helpers.expiring_soon(row) }
+        results += expiring.each_slice(BATCH_REQUEST_LIMIT).flat_map { |slice| helpers.renew_batch(slice) }
+        results += unsubscribed.map { |key, row| helpers.create_for(key, row) }
+        failed = results.select { |result| result[:outcome] == OUTCOME_FAILED }
+        failed.each { |result| log("#{result[:resource]} for #{result[:runbook_id]}: #{result[:error]}") }
+        if failed.any?
+          fail_job!("#{failed.length} subscription(s) could not be kept alive. The run log names each one.")
+        end
+
+        counts = { created: OUTCOME_CREATED, renewed: OUTCOME_RENEWED, removed: OUTCOME_REMOVED }
+                 .transform_values { |outcome| results.select { |result| result[:outcome] == outcome }.length }
+        [{ output: counts.merge(results: results) }]
+      end
+    end
+
+    action '34857f77-8991-4c62-b02b-dd22c475b24f' do
+      name 'Create Calendar Event'
+      avatar '/assets/icons/microsoft-outlook.svg'
+
+      description <<~END_OF_DESCRIPTION
+        Creates one event in a calendar of a mailbox, through the [create event API](https://learn.microsoft.com/en-us/graph/api/user-post-events). Microsoft sends an invitation to every attendee.
+
+        Start and End are the local date and time in the zone named in Time zone, such as 2026-12-01 08:00 in W. Europe Standard Time, never a time with an offset. Microsoft applies that zone's clock changes. A Start that does not exist in the zone, such as 02:30 on the night the clocks go forward, is moved later by Microsoft without an error, and Start and End in the output show the time it stored. When the moved Start falls after End, Microsoft refuses the event.
+
+        A step that runs again creates a second event, unless it carries a Transaction ID. A second create with the same Transaction ID and the same values returns the event that exists, and one with different values fails. Map a value that is the same for one booking and different for the next, such as the delivery id of the webhook that asked for the booking.
+      END_OF_DESCRIPTION
+
+      input_schema do
+        field :mailbox, 'Mailbox', :string,
+              visibility: 'optional',
+              hint: 'User principal name, object id or SMTP address of the mailbox that owns the calendar. Empty ' \
+                    'uses the connection\'s Default mailbox.'
+        field :calendar_id, 'Calendar ID', :string,
+              visibility: 'optional',
+              hint: 'The id of a calendar in the mailbox. Empty uses the default calendar of the mailbox.'
+        field :subject, 'Subject', :string,
+              required: true,
+              hint: 'The title of the event.'
+        field :start_time, 'Start', :string,
+              required: true,
+              hint: 'The local date and time the event starts, such as 2026-12-01 08:00, with no offset. Time zone ' \
+                    "says where. Convert a time with an offset first, such as #{WALL_TIME_CONVERSION}. " \
+                    "#{WALL_TIME_COLON_CAVEAT}"
+        field :end_time, 'End', :string,
+              required: true,
+              hint: 'The local date and time the event ends, such as 2026-12-01 10:00. It may equal Start, and may ' \
+                    "not be earlier. Convert a time with an offset first, such as #{WALL_TIME_CONVERSION}. " \
+                    "#{WALL_TIME_COLON_CAVEAT}"
+        field :time_zone, 'Time zone', :string,
+              required: true,
+              hint: 'The zone of Start and End, as a Windows name such as W. Europe Standard Time or an IANA name ' \
+                    'such as Europe/Zurich.'
+        field :body, 'Body', :string,
+              visibility: 'optional',
+              hint: 'The text of the event.'
+        field :body_type, 'Body type', :string,
+              visibility: 'optional',
+              default: DEFAULT_BODY_TYPE,
+              enumeration: BODY_TYPES,
+              hint: 'text keeps the line breaks as typed. html reads the body as markup.'
+        field :location, 'Location', :nested,
+              visibility: 'optional',
+              hint: 'Only the fields that hold a value are sent.' do
+          field :display_name, 'Display name', :string
+          field :street, 'Street', :string
+          field :postal_code, 'Postal code', :string
+          field :city, 'City', :string
+        end
+        field :attendees, 'Attendees', :string,
+              array: true,
+              visibility: 'optional',
+              hint: 'The addresses that receive the invitation. Add one value per address.'
+        field :reminder_minutes_before_start, 'Reminder minutes before start', :integer,
+              visibility: 'optional',
+              min: 0,
+              hint: 'Turns the reminder on this many minutes before Start. Empty leaves it to Microsoft, which ' \
+                    'turns a 15 minute reminder on.'
+        field :transaction_id, 'Transaction ID', :string,
+              visibility: 'optional',
+              hint: 'A value that is the same for one booking and different for the next, such as a webhook ' \
+                    'delivery id. A repeated create with it returns the existing event. Empty sends none.'
+      end
+
+      output_schema do
+        field :event_id, 'Event ID', :string,
+              required: true,
+              hint: 'The id Delete Calendar Event takes.'
+        field :web_link, 'Web link', :string,
+              hint: 'Opens the event in Outlook on the web.'
+        field :i_cal_uid, 'iCal UID', :string,
+              hint: 'The id every calendar shares for this event, including the copies of the attendees.'
+        field :subject, 'Subject', :string
+        field :start_time, 'Start', :nested,
+              hint: 'The start Microsoft stored, in the zone it was given.' do
+          field :date_time, 'Date time', :string
+          field :time_zone, 'Time zone', :string
+        end
+        field :end_time, 'End', :nested,
+              hint: 'The end Microsoft stored, in the zone it was given.' do
+          field :date_time, 'Date time', :string
+          field :time_zone, 'Time zone', :string
+        end
+        field :organizer, 'Organizer', :nested do
+          field :name, 'Name', :string
+          field :address, 'Address', :string
+        end
+        field :attendees, 'Attendees', :nested, array: true do
+          field :address, 'Address', :string
+          field :name, 'Name', :string
+          field :type, 'Type', :string
+        end
+        field :location, 'Location', :string,
+              hint: 'The display name of the location.'
+        field :is_reminder_on, 'Is reminder on', :boolean
+        field :reminder_minutes_before_start, 'Reminder minutes before start', :integer
+        field :created_date_time, 'Created date time', :date_time
+        field :mailbox, 'Mailbox', :string,
+              hint: 'The mailbox that owns the calendar.'
+      end
+
+      run do
+        mailbox = helpers.mailbox_for(input[:mailbox])
+        payload = helpers.event_payload(input)
+        calendar_id = helpers.calendar_id_for(input[:calendar_id])
+
+        response = http_post(helpers.events_url(mailbox, calendar_id), payload.to_json, JSON_HEADERS)
+        # A rerun after a pause posts again, which only a Transaction ID makes safe: Microsoft then hands back
+        # the event the first post created. Without one, a server error does not say no event was made.
+        safe_statuses = payload[:transactionId].present? ? TRANSIENT_SERVER_ERROR_STATUSES : []
+        backoff_if_needed(response, api_name: 'Microsoft', server_error_statuses: safe_statuses)
+        if response.status != EVENT_CREATED_STATUS
+          fail_job!(helpers.describe_event_failure(response, mailbox, payload, calendar_id))
+        end
+
+        event = helpers.parse_graph(response, mailbox, EVENT_CREATED_STATUS)
+        [{ output: helpers.event_summary(event).merge(mailbox: mailbox) }]
+      end
+    end
+
+    action '8ea14b2b-eaff-4350-9011-a0d5ad5b90f4' do
+      name 'Delete Calendar Event'
+      avatar '/assets/icons/microsoft-outlook.svg'
+
+      description <<~END_OF_DESCRIPTION
+        Deletes one event from the mailbox, through the [delete event API](https://learn.microsoft.com/en-us/graph/api/event-delete). When the mailbox organised the event, Microsoft sends a cancellation to the attendees.
+
+        An event Microsoft does not find in the mailbox passes with Deleted false, so a cancel that arrives twice does not fail the second time. Deleted false says only that this mailbox held no such event when the step asked: an earlier delete removed it, an earlier try of this same step removed it before Microsoft answered with a server error, or the Event ID was never in this mailbox. An empty Event ID fails the step.
+      END_OF_DESCRIPTION
+
+      input_schema do
+        field :event_id, 'Event ID', :string,
+              required: true,
+              hint: 'The Event ID that Create Calendar Event returned.'
+        field :mailbox, 'Mailbox', :string,
+              visibility: 'optional',
+              hint: 'User principal name, object id or SMTP address of the mailbox that holds the event. Empty uses ' \
+                    'the connection\'s Default mailbox.'
+      end
+
+      output_schema do
+        field :deleted, 'Deleted', :boolean,
+              required: true,
+              hint: 'True when this step deleted the event. False when the mailbox held no event with this id ' \
+                    'when the step asked: an earlier delete, or an earlier try of this step, removed it, or it ' \
+                    'was never in this mailbox.'
+        field :event_id, 'Event ID', :string
+        field :mailbox, 'Mailbox', :string
+      end
+
+      run do
+        mailbox = helpers.mailbox_for(input[:mailbox])
+        event_id = helpers.event_id_for(input[:event_id])
+
+        response = http_delete(helpers.event_url(mailbox, event_id))
+        backoff_if_needed(response, api_name: 'Microsoft', server_error_statuses: TRANSIENT_SERVER_ERROR_STATUSES)
+        deleted = response.status == EVENT_DELETED_STATUS
+        gone = response.status == EVENT_GONE_STATUS && helpers.graph_error(response)['code'] == EVENT_GONE_CODE
+        fail_job!(helpers.describe_calendar_refusal(response, mailbox)) unless deleted || gone
+
+        [{ output: { deleted: deleted, event_id: event_id, mailbox: mailbox } }]
+      end
+    end
+
     helper :message_ids_for do |value|
       ids = Array(value).map { |message_id| message_id.to_s.strip }.reject(&:blank?).uniq
       fail_job!('No message ids to move. Map Message IDs to the Message ID an earlier step returned.') if ids.blank?
@@ -1089,19 +1405,31 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
       helpers.move_results(message_ids, helpers.parse_graph(response, mailbox))
     end
 
-    helper :move_results do |message_ids, body|
+    helper :batch_answers do |body, sent|
       answers = body['responses']
       unless answers.is_a?(Array)
         raise IPaaS::Error, 'Microsoft Graph returned a batch answer whose responses are not a list'
       end
+      # rubocop:disable-next Style/PredicateWithKind, Performance/RedundantEqualityComparisonBlock
+      unless answers.all? { |answer| answer.is_a?(Hash) }
+        raise IPaaS::Error, 'Microsoft Graph returned a batch answer with a response that is not an object'
+      end
 
       by_id = answers.index_by { |answer| answer['id'].to_s }
-      sent = message_ids.each_with_index.map { |_message_id, index| index.to_s }
+      if by_id.length != answers.length
+        raise IPaaS::Error, 'Microsoft Graph answered one request of this batch more than once'
+      end
+
       unexpected = by_id.keys.reject { |id| sent.include?(id) }
       if unexpected.present?
         raise IPaaS::Error, "Microsoft Graph answered request '#{unexpected.first}', which this batch never sent"
       end
 
+      by_id
+    end
+
+    helper :move_results do |message_ids, body|
+      by_id = helpers.batch_answers(body, message_ids.each_with_index.map { |_message_id, index| index.to_s })
       message_ids.each_with_index.map do |message_id, index|
         answer = by_id[index.to_s]
         moved = answer.present? && MOVE_SUCCESS_STATUSES.include?(answer['status'].to_i)
@@ -1114,17 +1442,17 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
           message_id: message_id,
           new_message_id: new_message_id,
           moved: moved,
-          error: moved ? nil : helpers.describe_move_failure(answer),
+          error: moved ? nil : helpers.describe_batch_failure(answer),
         }
       end
     end
 
-    helper :describe_move_failure do |answer|
+    helper :describe_batch_failure do |answer|
       if answer.blank?
-        'Microsoft Graph returned no answer for this message.'
+        'Microsoft Graph returned no answer for this request.'
       else
-        error = answer.dig('body', 'error')
-        error = {} unless error.is_a?(Hash)
+        body = answer['body'].is_a?(Hash) ? answer['body'] : {}
+        error = body['error'].is_a?(Hash) ? body['error'] : {}
         detail = error['message'].presence || 'no error details'
         "Microsoft Graph returned HTTP #{answer['status']} #{error['code']}: #{detail}"
       end
@@ -1355,8 +1683,8 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
       helpers.parse_graph(response, mailbox)
     end
 
-    helper :parse_graph do |response, mailbox = nil|
-      fail_job!(helpers.describe_graph_failure(response, mailbox)) if response.status != 200
+    helper :parse_graph do |response, mailbox = nil, expected_status = 200|
+      fail_job!(helpers.describe_graph_failure(response, mailbox)) if response.status != expected_status
 
       body = parse_json_response(response.body,
                                  error_message: 'Microsoft Graph returned a response that is not JSON: ' \
@@ -1410,10 +1738,14 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
       }
     end
 
+    helper :graph_error do |response|
+      error = parse_json_object_or_empty(response.body.to_s)['error']
+      error.is_a?(Hash) ? error : {}
+    end
+
     helper :describe_graph_failure do |response, mailbox = nil|
       raw = response.body.to_s
-      error = parse_json_object_or_empty(raw)['error']
-      error = {} unless error.is_a?(Hash)
+      error = helpers.graph_error(response)
       detail = error['message'].presence || raw.presence || 'no response body'
       # Named only on the two statuses that mean the caller was refused, because those are the ones
       # where the mailbox is the thing to go and look at. A 400 on a malformed folder or a 404 on a
@@ -1614,6 +1946,155 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
       recipients.map { |recipient| recipient[:emailAddress][:address] }
     end
 
+    helper :calendar_id_for do |value|
+      calendar_id = value.to_s.strip
+      next '' if calendar_id.blank?
+
+      unless calendar_id.length <= MAX_GRAPH_ID_LENGTH && MESSAGE_ID_PATTERN.match?(calendar_id)
+        fail_job!("Calendar ID '#{calendar_id}' is not a Microsoft Graph calendar id. Map the id of a calendar in " \
+                  'the mailbox, or leave Calendar ID empty to use its default calendar.')
+      end
+
+      calendar_id
+    end
+
+    helper :events_url do |mailbox, calendar_id|
+      path = if calendar_id.blank?
+               EVENTS_PATH
+             else
+               "#{CALENDARS_PATH}/#{helpers.escape_segment(calendar_id)}#{EVENTS_PATH}"
+             end
+      helpers.graph_url("#{helpers.user_path(mailbox)}#{path}")
+    end
+
+    helper :event_id_for do |value|
+      event_id = value.to_s.strip
+      unless event_id.length <= MAX_GRAPH_ID_LENGTH && MESSAGE_ID_PATTERN.match?(event_id)
+        fail_job!("Event ID '#{event_id}' is not a Microsoft Graph event id. Map the Event ID an earlier step " \
+                  'returned, not one copied from a browser address bar.')
+      end
+
+      event_id
+    end
+
+    helper :event_url do |mailbox, event_id|
+      helpers.graph_url("#{helpers.user_path(mailbox)}#{EVENTS_PATH}/#{helpers.escape_segment(event_id)}")
+    end
+
+    helper :wall_time_for do |value, field_label|
+      text = value.to_s.strip
+      parts = WALL_TIME_PATTERN.match(text)
+      if parts.nil?
+        fail_job!("#{field_label} '#{text}' is not a local date and time such as 2026-12-01 08:00. Convert a time " \
+                  "with an offset or Z first, such as #{WALL_TIME_CONVERSION}, and name the same zone in Time zone. " \
+                  "#{WALL_TIME_COLON_CAVEAT}")
+      end
+
+      date, hour, minute, second = parts.captures
+      begin
+        Date.parse(date)
+      rescue ArgumentError
+        fail_job!("#{field_label} '#{text}' names a day the calendar does not have.")
+      end
+
+      "#{date}T#{hour.rjust(2, '0')}:#{minute}:#{second || '00'}"
+    end
+
+    helper :event_location do |place|
+      fields = place || {}
+      address = { street: fields[:street], postalCode: fields[:postal_code], city: fields[:city] }.compact_blank
+      { displayName: fields[:display_name], address: address }.compact_blank.presence
+    end
+
+    helper :event_attendees do |addresses|
+      helpers.recipients_for(addresses, 'Attendees').map { |attendee| attendee.merge(type: ATTENDEE_TYPE) }
+    end
+
+    helper :event_payload do |fields|
+      zone = fields[:time_zone].to_s.strip
+      starts = helpers.wall_time_for(fields[:start_time], 'Start')
+      ends = helpers.wall_time_for(fields[:end_time], 'End')
+      if ends < starts
+        fail_job!("End '#{fields[:end_time]}' is earlier than Start '#{fields[:start_time]}'. An event that runs " \
+                  'past midnight needs the date of the next day in End.')
+      end
+
+      reminder = helpers.integer_or_default(fields[:reminder_minutes_before_start], nil)
+      body_type = helpers.body_type_for(fields[:body_type])
+      body = { contentType: body_type, content: fields[:body] } if fields[:body].present?
+      {
+        subject: fields[:subject],
+        body: body,
+        start: { dateTime: starts, timeZone: zone },
+        end: { dateTime: ends, timeZone: zone },
+        location: helpers.event_location(fields[:location]),
+        attendees: helpers.event_attendees(fields[:attendees]).presence,
+        isReminderOn: reminder.nil? ? nil : true,
+        reminderMinutesBeforeStart: reminder,
+        transactionId: fields[:transaction_id].to_s.strip.presence,
+      }.compact
+    end
+
+    helper :describe_calendar_refusal do |response, mailbox|
+      text = helpers.describe_graph_failure(response)
+      next text unless MAILBOX_REFUSED_STATUSES.include?(response.status)
+
+      "#{text} Microsoft refused mailbox '#{mailbox}'. #{CALENDAR_PERMISSION_HINT}"
+    end
+
+    helper :describe_event_failure do |response, mailbox, payload, calendar_id|
+      code = helpers.graph_error(response)['code']
+      start = payload[:start]
+      if code == DUPLICATE_TRANSACTION_CODE
+        "Transaction ID '#{payload[:transactionId]}' already created an event in mailbox '#{mailbox}' with other " \
+          'values, so Microsoft refused a second one. Map a Transaction ID that changes from one booking to the next.'
+      elsif code == UNKNOWN_TIME_ZONE_CODE
+        "Microsoft does not know the time zone '#{start[:timeZone]}'. Use a Windows name such as W. Europe " \
+          'Standard Time or an IANA name such as Europe/Zurich.'
+      elsif code == REFUSED_PROPERTY_CODE
+        "Microsoft refused the event from #{start[:dateTime]} to #{payload[:end][:dateTime]} in #{start[:timeZone]}. " \
+          'A Start in the hour the clocks skip forward is moved later, and the event is refused when that ' \
+          'puts Start after End.'
+      elsif code == EVENT_GONE_CODE && calendar_id.present?
+        "Mailbox '#{mailbox}' has no calendar '#{calendar_id}'. Map the id of a calendar in this mailbox, or leave " \
+          'Calendar ID empty to use its default calendar.'
+      elsif payload[:transactionId].blank? && TRANSIENT_SERVER_ERROR_STATUSES.include?(response.status)
+        "#{helpers.describe_graph_failure(response)} #{EVENT_MAY_EXIST_HINT}"
+      else
+        helpers.describe_calendar_refusal(response, mailbox)
+      end
+    end
+
+    helper :event_time do |value|
+      time = value.to_h
+      { date_time: time['dateTime'], time_zone: time['timeZone'] }
+    end
+
+    helper :attendee_summary do |attendee|
+      email_address = attendee['emailAddress'] || {}
+      { address: email_address['address'], name: email_address['name'], type: attendee['type'] }
+    end
+
+    helper :event_summary do |event|
+      raise IPaaS::Error, 'Microsoft Graph created an event without naming its id' if event['id'].blank?
+
+      organizer = event.dig('organizer', 'emailAddress') || {}
+      {
+        event_id: event['id'],
+        web_link: event['webLink'],
+        i_cal_uid: event['iCalUId'],
+        subject: event['subject'],
+        start_time: helpers.event_time(event['start']),
+        end_time: helpers.event_time(event['end']),
+        organizer: { name: organizer['name'], address: organizer['address'] },
+        attendees: (event['attendees'] || []).map { |attendee| helpers.attendee_summary(attendee) },
+        location: event.dig('location', 'displayName'),
+        is_reminder_on: event['isReminderOn'],
+        reminder_minutes_before_start: event['reminderMinutesBeforeStart'],
+        created_date_time: event['createdDateTime'],
+      }
+    end
+
     helper :url_postfix_set do
       !trigger.config[:url_postfix].nil?
     end
@@ -1637,6 +2118,25 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
       outbound_connection.store.write(SUBSCRIPTIONS_STORE_KEY, rows)
     end
 
+    helper :own_row do
+      rows = helpers.subscription_rows
+      rows[trigger.runbook.uuid] || rows[trigger.endpoint] || {}
+    end
+
+    helper :store_own_row do |watch|
+      rows = helpers.subscription_rows
+      moved = rows.delete(trigger.endpoint)
+      current = rows.delete(trigger.runbook.uuid)
+      kept = current || moved || {}
+      same_watch = watch.present? && kept['resource'] == watch['resource'] &&
+                   kept.fetch('endpoint', watch['endpoint']) == watch['endpoint']
+      row = same_watch ? kept.merge(watch) : watch
+      next if moved.nil? && current == row
+
+      rows[trigger.runbook.uuid] = row if row
+      helpers.write_subscription_rows(rows)
+    end
+
     helper :validation_token do |request|
       token = begin
         Rack::Utils.parse_query(URI.parse(request.url).query)[VALIDATION_TOKEN_PARAM].to_s
@@ -1648,6 +2148,188 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
       end
 
       token
+    end
+
+    helper :created_subscription do |response|
+      unless SUBSCRIPTION_CREATED_STATUSES.include?(response.status)
+        fail_job!("Microsoft did not create the subscription. #{helpers.describe_graph_failure(response)} " \
+                  'Microsoft checks that it can reach the trigger before it checks anything else, so it reports an ' \
+                  'iPaaS it cannot reach, a runbook that is not deployed and a wrong mailbox or folder alike.')
+      end
+      body = parse_json_response(response.body.to_s,
+                                 error_message: 'Microsoft Graph returned a subscription that is not JSON: ' \
+                                                "'#{response.body}'")
+      unless body.is_a?(Hash) && SUBSCRIPTION_ID_PATTERN.match?(body['id'].to_s)
+        fail_job!('Microsoft Graph created a subscription with no subscription id. The next run removes it.')
+      end
+
+      body
+    end
+
+    helper :subscription_expiry do
+      (MAX_SUBSCRIPTION_LIFETIME_MINUTES - CLOCK_SKEW_MARGIN_MINUTES).minutes.from_now.utc.iso8601
+    end
+
+    helper :create_subscription do |endpoint, resource|
+      fail_job!('This subscription records nothing to watch. Deploy the trigger again.') if resource.blank?
+
+      client_state = SecureRandom.uuid
+      expiry = helpers.subscription_expiry
+      response = http_post(helpers.graph_url(SUBSCRIPTION_PATH),
+                           {
+                             changeType: SUBSCRIPTION_CHANGE_TYPE,
+                             notificationUrl: endpoint,
+                             resource: resource,
+                             clientState: client_state,
+                             expirationDateTime: expiry,
+                           }.to_json,
+                           JSON_HEADERS)
+      backoff_if_needed(response, api_name: 'Microsoft', server_error_statuses: TRANSIENT_SERVER_ERROR_STATUSES)
+      subscription = helpers.created_subscription(response)
+      { 'id' => subscription['id'], 'client_state' => make_secret_string(client_state).to_s,
+        'expires_at' => subscription['expirationDateTime'].presence || expiry, }
+    end
+
+    helper :held_subscriptions do
+      by_id = {}
+      url = helpers.graph_url(SUBSCRIPTION_PATH)
+      MAX_SUBSCRIPTION_LIST_REQUESTS.times do
+        body = helpers.graph_get(url)
+        page = body['value']
+        # rubocop:disable-next Style/PredicateWithKind, Performance/RedundantEqualityComparisonBlock
+        unless page.is_a?(Array) && page.all? { |subscription| subscription.is_a?(Hash) }
+          raise IPaaS::Error, 'Microsoft Graph returned a subscription list that is not a list of subscriptions.'
+        end
+
+        page.each { |subscription| by_id[subscription['id'].to_s] = subscription }
+        url = helpers.next_page_link(body)
+        break if url.blank?
+      end
+      if url.present?
+        log("Microsoft holds more subscriptions than #{MAX_SUBSCRIPTION_LIST_REQUESTS} pages list, so this run " \
+            'trusts every stored subscription id.')
+      end
+
+      { 'by_id' => by_id, 'complete' => url.blank? }
+    rescue IPaaS::Job::Outbound::CustomerCredentialsError, IPaaS::Job::RescheduleJob
+      raise
+    rescue IPaaS::Error => e
+      log("Microsoft did not list its subscriptions, so this run trusts every stored subscription id: #{e.message}")
+      { 'by_id' => by_id, 'complete' => false }
+    end
+
+    helper :held_id do |row, held|
+      id = helpers.stored_subscription_id(row)
+      next nil if id.nil?
+      next id unless held['complete']
+
+      held['by_id'].key?(id) ? id : nil
+    end
+
+    helper :expiring_soon do |row|
+      expires_at = row['expires_at'].to_s
+      next true if expires_at.blank?
+
+      Time.parse(expires_at) < RENEWAL_WINDOW_MINUTES.minutes.from_now
+    rescue ArgumentError
+      true
+    end
+
+    helper :without_shadowed_rows do |rows|
+      addresses = rows.reject { |key, _row| key.start_with?(ADDRESS_KEY_PREFIX) }.values.map { |row| row['endpoint'] }
+      rows.reject { |key, _row| key.start_with?(ADDRESS_KEY_PREFIX) && addresses.include?(key) }
+    end
+
+    helper :runbook_id_for do |key|
+      key.to_s.start_with?(ADDRESS_KEY_PREFIX) ? key.to_s.split('/').last : key
+    end
+
+    helper :remove_unrecorded_subscriptions do |rows, held|
+      keys_by_endpoint = rows.to_h { |key, row| [row['endpoint'] || key, key] }
+      known = rows.values.map { |row| helpers.stored_subscription_id(row) }
+      held['by_id'].values.filter_map do |subscription|
+        key = keys_by_endpoint[subscription['notificationUrl']]
+        id = helpers.stored_subscription_id(subscription)
+        next if key.nil? || id.nil? || known.include?(id)
+
+        recorded = helpers.without_shadowed_rows(helpers.subscription_rows).values.map do |row|
+          helpers.stored_subscription_id(row)
+        end
+        next if recorded.include?(id)
+
+        row = { 'resource' => subscription['resource'], 'id' => id, 'expires_at' => subscription['expirationDateTime'] }
+        row = rows[key].slice('mailbox', 'folder').merge(row) if subscription['resource'] == rows[key]['resource']
+        helpers.delete_subscription(row)
+        helpers.result(key, row, OUTCOME_REMOVED, nil)
+      rescue IPaaS::Job::Outbound::CustomerCredentialsError
+        raise
+      rescue IPaaS::Job::FailJob => e
+        helpers.result(key, row, OUTCOME_FAILED, e.message)
+      end
+    end
+
+    helper :create_for do |key, row|
+      created = row.merge(helpers.create_subscription(row['endpoint'] || key, row['resource']))
+      next helpers.result(key, created, OUTCOME_CREATED, nil) if helpers.store_result(key, row, created)
+
+      helpers.delete_subscription(created)
+      helpers.result(key, row, OUTCOME_SKIPPED, ROW_CHANGED_WHILE_ANSWERING)
+    rescue IPaaS::Job::Outbound::CustomerCredentialsError
+      raise
+    rescue IPaaS::Job::FailJob => e
+      helpers.result(key, row, OUTCOME_FAILED, e.message)
+    end
+
+    helper :renew_batch do |slice|
+      expiry = helpers.subscription_expiry
+      requests = slice.each_with_index.map do |pair, index|
+        _key, row = pair
+        { id: index.to_s, method: 'PATCH', url: "#{SUBSCRIPTION_PATH}/#{helpers.stored_subscription_id(row)}",
+          headers: JSON_HEADERS, body: { expirationDateTime: expiry }, }
+      end
+      response = http_post(helpers.graph_url(BATCH_PATH), { requests: requests }.to_json, JSON_HEADERS)
+      backoff_if_needed(response, api_name: 'Microsoft', server_error_statuses: TRANSIENT_SERVER_ERROR_STATUSES)
+      answers = helpers.batch_answers(helpers.parse_graph(response), requests.pluck(:id))
+      slice.each_with_index.map do |pair, index|
+        key, row = pair
+        helpers.renewal_result(key, row, answers[index.to_s], expiry)
+      end
+    rescue IPaaS::Job::Outbound::CustomerCredentialsError, IPaaS::Job::RescheduleJob
+      raise
+    rescue IPaaS::Error => e
+      slice.map { |pair| helpers.result(pair.first, pair.last, OUTCOME_FAILED, e.message) }
+    end
+
+    helper :renewal_result do |key, row, answer, expiry|
+      status = answer.is_a?(Hash) ? answer['status'].to_s.to_i : 0
+      next helpers.create_for(key, row) if SUBSCRIPTION_GONE_STATUSES.include?(status)
+      unless status == SUBSCRIPTION_RENEWED_STATUS
+        next helpers.result(key, row, OUTCOME_FAILED, helpers.describe_batch_failure(answer))
+      end
+
+      body = answer['body'].is_a?(Hash) ? answer['body'] : {}
+      renewed = row.merge('expires_at' => body['expirationDateTime'].presence || expiry)
+      next helpers.result(key, renewed, OUTCOME_RENEWED, nil) if helpers.store_result(key, row, renewed)
+
+      helpers.result(key, row, OUTCOME_SKIPPED, ROW_CHANGED_WHILE_ANSWERING)
+    end
+
+    helper :store_result do |key, before, after|
+      rows = helpers.subscription_rows
+      current = rows[key]
+      unchanged = rows.key?(key) && current['resource'] == before['resource'] &&
+                  current['endpoint'] == before['endpoint'] &&
+                  helpers.stored_subscription_id(current) == helpers.stored_subscription_id(before)
+      next false unless unchanged
+
+      helpers.write_subscription_rows(rows.merge(key => after))
+      true
+    end
+
+    helper :result do |key, row, outcome, error|
+      { runbook_id: helpers.runbook_id_for(key), resource: row['resource'], mailbox: row['mailbox'],
+        folder: row['folder'], subscription_id: row['id'], expires_at: row['expires_at'].presence,
+        outcome: outcome, error: error, }
     end
 
     helper :notifications do |raw_body|
