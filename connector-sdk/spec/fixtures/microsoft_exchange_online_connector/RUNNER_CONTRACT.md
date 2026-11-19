@@ -102,7 +102,8 @@ these exception names in it, so the runner must not rewrite them:
 | `ManagementObjectNotFoundException` | Get-Recipient | "No recipient holds this address" |
 | `UserNotFoundInPermissionEntryException` | Get-MailboxFolderPermission | "User has no entry on this folder" |
 
-`category` is informational (`invalid`, `not_found`, `forbidden`, `unauthorized`, `throttled`, `internal`); the
+`category` is informational (`invalid`, `not_found`, `forbidden`, `unauthorized`, `throttled`, `busy`, `timeout`,
+`connect_failed`, `internal`); the
 connector shows it in the failure message but does not branch on it.
 
 ## Still to confirm against a live tenant
