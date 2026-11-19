@@ -130,6 +130,9 @@ module IPaaS
         return unless connection_definition
         return outbound_setup_info if outbound?
         inbound_setup_info if inbound?
+      rescue IPaaS::Encryption::Errors::InvalidHashedCredential => e
+        IPaaS.default_logger.warn("Setup info for connection '#{uuid}' skipped: #{e.message}")
+        nil
       end
 
       def config_tester
@@ -222,6 +225,9 @@ module IPaaS
 
       def config_mapping_valid?
         return unless connector && (inbound? || outbound?)
+
+        refusal = IPaaS::Job::LookupTables.fixed_table_refusal(self)
+        return errors.add(:base, refusal) if refusal
         return if IPaaS::Connector::Mapping.invalid_mapping?(self, :config_mapping)
 
         report_mapping_validity(:config_mapping, config)

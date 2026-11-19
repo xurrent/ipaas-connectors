@@ -24,10 +24,12 @@ module IPaaS
       ENV['IPAAS_ENV'] || 'production'
     end
 
-    def solution_directory
-      if const_defined?(:Rails) && const_defined?(:ENVx) && Rails.root
-        return @solution_directory if @solution_directory
+    attr_writer :solution_directory, :default_logger
 
+    def solution_directory
+      return @solution_directory if @solution_directory
+
+      if const_defined?(:Rails) && const_defined?(:ENVx) && Rails.root
         return @solution_directory = Rails.root.join(ENVx.SOLUTION_DATA_DIR).expand_path.to_s
       end
 
@@ -161,6 +163,8 @@ require 'ipaas/job/ruby'
 require 'ipaas/job/memory_store'
 require 'ipaas/job/memory_locker'
 require 'ipaas/job/lock'
+require 'ipaas/job/memory_lookup_tables'
+require 'ipaas/job/lookup_tables'
 require 'ipaas/job/blueprint_store'
 require 'ipaas/job/encryption'
 require 'ipaas/job/environment'

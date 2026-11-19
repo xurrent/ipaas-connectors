@@ -52,6 +52,7 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
   # 401 and 403 are Microsoft refusing the caller. Every other failure can come from the folder, the
   # filter or the message, so naming a mailbox on those would point at something that is working.
   MAILBOX_REFUSED_STATUSES = [401, 403].freeze
+  REQUEST_ID_KEY = 'request-id'.freeze
   TO_RECIPIENTS_FIELD = 'toRecipients'.freeze
 
   SEARCH_FILTER_JOIN  = ' and '.freeze
@@ -1454,7 +1455,8 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
         body = answer['body'].is_a?(Hash) ? answer['body'] : {}
         error = body['error'].is_a?(Hash) ? body['error'] : {}
         detail = error['message'].presence || 'no error details'
-        "Microsoft Graph returned HTTP #{answer['status']} #{error['code']}: #{detail}"
+        reference = helpers.graph_request_reference(error, answer['headers'])
+        "Microsoft Graph returned HTTP #{answer['status']} #{error['code']}: #{detail}#{reference}"
       end
     end
 
@@ -1752,7 +1754,20 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
       # missing message would name a mailbox that is working, and send the reader to the wrong field.
       refused = MAILBOX_REFUSED_STATUSES.include?(response.status) && mailbox.present?
       place = refused ? " while reading mailbox '#{mailbox}'" : ''
-      "Microsoft Graph returned HTTP #{response.status} #{error['code']}#{place}: #{detail}"
+      reference = helpers.graph_request_reference(error, response.headers)
+      "Microsoft Graph returned HTTP #{response.status} #{error['code']}#{place}: #{detail}#{reference}"
+    end
+
+    helper :graph_request_reference do |error, headers|
+      inner = error['innerError'] || error['innererror']
+      inner = {} unless inner.is_a?(Hash)
+      headers = {} unless headers.is_a?(Hash)
+      header = headers.detect { |name, _value| name.to_s.downcase == REQUEST_ID_KEY }&.last
+      request_id = inner[REQUEST_ID_KEY].presence || header.presence
+      next '' if request_id.blank?
+
+      date = inner['date'].presence
+      date ? " (request-id #{request_id}, date #{date})" : " (request-id #{request_id})"
     end
 
     helper :search_folder_for do |value|
@@ -2043,22 +2058,27 @@ class MicrosoftOutlookConnector < IPaaS::Connector::Definition
     end
 
     helper :describe_event_failure do |response, mailbox, payload, calendar_id|
-      code = helpers.graph_error(response)['code']
+      error = helpers.graph_error(response)
+      code = error['code']
       start = payload[:start]
-      if code == DUPLICATE_TRANSACTION_CODE
-        "Transaction ID '#{payload[:transactionId]}' already created an event in mailbox '#{mailbox}' with other " \
-          'values, so Microsoft refused a second one. Map a Transaction ID that changes from one booking to the next.'
-      elsif code == UNKNOWN_TIME_ZONE_CODE
-        "Microsoft does not know the time zone '#{start[:timeZone]}'. Use a Windows name such as W. Europe " \
-          'Standard Time or an IANA name such as Europe/Zurich.'
-      elsif code == REFUSED_PROPERTY_CODE
-        "Microsoft refused the event from #{start[:dateTime]} to #{payload[:end][:dateTime]} in #{start[:timeZone]}. " \
-          'A Start in the hour the clocks skip forward is moved later, and the event is refused when that ' \
-          'puts Start after End.'
-      elsif code == EVENT_GONE_CODE && calendar_id.present?
-        "Mailbox '#{mailbox}' has no calendar '#{calendar_id}'. Map the id of a calendar in this mailbox, or leave " \
-          'Calendar ID empty to use its default calendar.'
-      elsif payload[:transactionId].blank? && TRANSIENT_SERVER_ERROR_STATUSES.include?(response.status)
+      text = if code == DUPLICATE_TRANSACTION_CODE
+               "Transaction ID '#{payload[:transactionId]}' already created an event in mailbox '#{mailbox}' with " \
+                 'other values, so Microsoft refused a second one. Map a Transaction ID that changes from one ' \
+                 'booking to the next.'
+             elsif code == UNKNOWN_TIME_ZONE_CODE
+               "Microsoft does not know the time zone '#{start[:timeZone]}'. Use a Windows name such as W. Europe " \
+                 'Standard Time or an IANA name such as Europe/Zurich.'
+             elsif code == REFUSED_PROPERTY_CODE
+               "Microsoft refused the event from #{start[:dateTime]} to #{payload[:end][:dateTime]} in " \
+                 "#{start[:timeZone]}. A Start in the hour the clocks skip forward is moved later, and the event " \
+                 'is refused when that puts Start after End.'
+             elsif code == EVENT_GONE_CODE && calendar_id.present?
+               "Mailbox '#{mailbox}' has no calendar '#{calendar_id}'. Map the id of a calendar in this mailbox, or " \
+                 'leave Calendar ID empty to use its default calendar.'
+             end
+      next "#{text}#{helpers.graph_request_reference(error, response.headers)}" if text
+
+      if payload[:transactionId].blank? && TRANSIENT_SERVER_ERROR_STATUSES.include?(response.status)
         "#{helpers.describe_graph_failure(response)} #{EVENT_MAY_EXIST_HINT}"
       else
         helpers.describe_calendar_refusal(response, mailbox)

@@ -217,7 +217,7 @@ describe 'Microsoft Entra Group Members Action', :action do
         end
 
         it 'uses iteration_state_value' do
-          old_next_link = 'https://foo/baz'
+          old_next_link = "#{endpoint}/next-page"
           group_id = 'baz'
           stub = stub_request(:get, old_next_link)
                  .with(query: nil)
@@ -236,6 +236,70 @@ describe 'Microsoft Entra Group Members Action', :action do
           output = run_action({ group_id: group_id })
           expect(output[:has_next_page]).to eq(false)
           expect(output[:members].pluck(:member_id)).to contain_exactly('2d6')
+          expect(stub).to have_been_requested.once
+        end
+
+        it 'refuses a stored next page link on another host and sends it nothing' do
+          foreign_link = 'https://elsewhere.example.com/v1/next-page'
+          action({ group_id: 'baz' }).send(:iteration_state_value=, { odata_nextLink: foreign_link })
+
+          expect do
+            run_action({ group_id: 'baz' })
+          end.to raise_error(IPaaS::Job::FailJob, /next page link that is not on/)
+          expect(a_request(:any, /elsewhere\.example\.com/)).not_to have_been_made
+        end
+
+        it 'refuses a stored next page link on the Graph host but outside the endpoint path' do
+          outside_link = 'https://graph.example.com/beta/next-page'
+          action({ group_id: 'baz' }).send(:iteration_state_value=, { odata_nextLink: outside_link })
+
+          expect do
+            run_action({ group_id: 'baz' })
+          end.to raise_error(IPaaS::Job::FailJob, /next page link that is not on/)
+          expect(a_request(:any, %r{graph\.example\.com/beta})).not_to have_been_made
+        end
+
+        it 'refuses a stored next page link that is not a URL' do
+          action({ group_id: 'baz' }).send(:iteration_state_value=, { odata_nextLink: "#{endpoint}/next page" })
+
+          expect do
+            run_action({ group_id: 'baz' })
+          end.to raise_error(IPaaS::Job::FailJob, /next page link that is not a URL/)
+          expect(a_request(:any, /graph\.example\.com/)).not_to have_been_made
+        end
+      end
+
+      describe 'group ID' do
+        it 'encodes a slash in the group ID, so the request stays on the members path of that one group' do
+          stub = stub_request(:get, "#{endpoint}/groups/a%2Fb/members")
+                 .with(query: hash_including({}))
+                 .to_return(body: { value: [{ '@odata.type': '#microsoft.graph.user', id: '4d6' }] }.to_json)
+
+          output = run_action({ group_id: 'a/b' })
+
+          expect(output[:members].pluck(:member_id)).to contain_exactly('4d6')
+          expect(stub).to have_been_requested.once
+        end
+
+        it 'encodes a question mark and a hash in the group ID, so neither starts a query or a fragment' do
+          stub = stub_request(:get, "#{endpoint}/groups/a%3Fb%23c/members")
+                 .with(query: hash_including({}))
+                 .to_return(body: { value: [{ '@odata.type': '#microsoft.graph.user', id: '5d6' }] }.to_json)
+
+          output = run_action({ group_id: 'a?b#c' })
+
+          expect(output[:members].pluck(:member_id)).to contain_exactly('5d6')
+          expect(stub).to have_been_requested.once
+        end
+
+        it 'encodes a space in the group ID, so the request address stays valid' do
+          stub = stub_request(:get, "#{endpoint}/groups/a%20b/members")
+                 .with(query: hash_including({}))
+                 .to_return(body: { value: [{ '@odata.type': '#microsoft.graph.user', id: '6d6' }] }.to_json)
+
+          output = run_action({ group_id: 'a b' })
+
+          expect(output[:members].pluck(:member_id)).to contain_exactly('6d6')
           expect(stub).to have_been_requested.once
         end
       end

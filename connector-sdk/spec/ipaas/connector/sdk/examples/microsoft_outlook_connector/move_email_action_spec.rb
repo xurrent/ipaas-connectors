@@ -155,6 +155,21 @@ describe 'Microsoft Outlook Move Email Action', :action, :microsoft_outlook do
         .to eq('Microsoft Graph returned HTTP 400 ErrorInvalidIdMalformed: Id is malformed.')
     end
 
+    it 'ends a failed row with the request ID Microsoft gave that row' do
+      stub_batch([{ id: '0', status: 404,
+                    body: graph_failure('ErrorItemNotFound', 'The specified object was not found in the store.'), }])
+      expect(run_action(move_input([message_id('01')]))[:results].first['error'])
+        .to eq('Microsoft Graph returned HTTP 404 ErrorItemNotFound: The specified object was not found in the ' \
+               "store. (request-id #{graph_request_id}, date #{graph_request_date})")
+    end
+
+    it 'takes the request ID from the headers of a failed row when its body carries none' do
+      stub_batch([failed_row(0).merge(headers: { 'Request-Id' => graph_request_id })])
+      expect(run_action(move_input([message_id('01')]))[:results].first['error'])
+        .to eq('Microsoft Graph returned HTTP 404 ErrorItemNotFound: The specified object was not found in the ' \
+               "store. (request-id #{graph_request_id})")
+    end
+
     it 'says so when Microsoft answers the batch without a row for a message that was sent' do
       stub_batch([moved_row(0, new_message_id('01'))])
       results = run_action(move_input([message_id('01'), message_id('02')]))[:results]

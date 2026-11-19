@@ -412,6 +412,40 @@ describe IPaaS::Connector::Connection do
       end
     end
 
+    context 'setup_info' do
+      let(:setup_info_connector) do
+        IPaaS::Connector::Connector.new('setup-info-connector') do
+          outbound_connection do
+            config_schema do
+              field :credentials, 'Credentials', :nested do
+                field :account_id, 'Account', :string
+              end
+            end
+            setup_info do
+              { 'Quick setup': { Account: { value: config[:credentials][:account_id] } } }
+            end
+          end
+        end
+      end
+
+      it 'gives no setup info when the code reads a field from a hashed credential' do
+        connection = IPaaS::Connector::Connection.parse(
+          {
+            uuid: 'setup_info_connection_uuid',
+            direction: 'outbound',
+            name: 'setup info connection',
+            connector: { uuid: setup_info_connector.uuid },
+            config_mapping: [{ field_id: 'credentials', variable: 'credentials_variable' }],
+          },
+          resolve: false,
+        )
+        credential = IPaaS::Encryption::HashedCredential.derive('a plaintext of at least 22 characters')
+        connection.solution = double(environment: { credentials_variable: credential })
+
+        expect(connection.setup_info).to be_nil
+      end
+    end
+
     context 'provision' do
       it 'should log some data' do
         logs = []
@@ -610,6 +644,72 @@ describe IPaaS::Connector::Connection do
     it 'should define a self reference' do
       expect(connection.outbound_connection).to eq(connection)
       expect(connection.inbound_connection).to be_nil
+    end
+  end
+
+  context 'a Lookup Tables connection' do
+    around { |example| IPaaS::Connector::Connector.uuid_scope({}) { example.run } }
+
+    before do
+      [IPaaS::Job::LookupTables::CONNECTOR_UUID, 'another-connector-id'].each do |uuid|
+        IPaaS::Connector::Connector.new(uuid) do
+          outbound_connection do
+            config_schema do
+              field :table, 'Table', :string
+              field :columns, 'Columns', :hash
+              field :note, 'Note', :string
+            end
+          end
+        end
+      end
+    end
+
+    def table_connection(*config_mapping, connector: IPaaS::Job::LookupTables::CONNECTOR_UUID)
+      IPaaS::Connector::Connection.parse(
+        { direction: 'outbound', name: 'Device map', connector: { uuid: connector }, config_mapping: config_mapping },
+      )
+    end
+
+    it 'accepts a fixed table and columns, and any mapping of another field' do
+      connection = table_connection({ field_id: 'table', fixed: 'Codes' },
+                                    { field_id: 'columns', fixed: { table_uuid: 'x' } },
+                                    { field_id: 'note', proc: '"a" + "b"' })
+
+      expect(connection).to be_valid
+      expect(connection.config).to eq('table' => 'Codes', 'columns' => { 'table_uuid' => 'x' }, 'note' => 'ab')
+    end
+
+    [
+      { proc: '"Codes"' },
+      { variable: 'TABLE' },
+      { runbook_variable: 'table-variable' },
+      { nested: [{ field_id: 'table_uuid', fixed: 'x' }] },
+    ].each do |mapping|
+      it "refuses a #{mapping.keys.first} mapping of the table or the columns field with one message" do
+        fixed = { 'table' => 'Codes', 'columns' => { table_uuid: 'x' } }
+        connections = fixed.keys.map do |field_id|
+          others = fixed.except(field_id).map { |id, value| { field_id: id, fixed: value } }
+          table_connection({ field_id: field_id, **mapping }, *others)
+        end
+
+        expect(connections.map(&:valid?)).to eq([false, false])
+        expect(connections.map { |connection| connection.errors.full_messages })
+          .to eq([[IPaaS::Job::LookupTables::FIXED_TABLE]] * 2)
+      end
+    end
+
+    it 'refuses a table proc with the one message, also when the proc is itself invalid' do
+      connection = table_connection({ field_id: 'table', proc: 'eval("1")' }, { field_id: 'columns', fixed: {} })
+
+      expect(connection).not_to be_valid
+      expect(connection.errors.full_messages).to eq([IPaaS::Job::LookupTables::FIXED_TABLE])
+    end
+
+    it 'leaves the same fields of another connector to their usual rules' do
+      connection = table_connection({ field_id: 'table', proc: '"Codes"' }, connector: 'another-connector-id')
+
+      expect(connection).to be_valid
+      expect(connection.config).to include('table' => 'Codes')
     end
   end
 

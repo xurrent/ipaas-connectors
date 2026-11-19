@@ -81,6 +81,17 @@ describe 'Microsoft Outlook Delete Calendar Event Action', :action, :microsoft_o
                         'Calendars.ReadWrite application permission for this mailbox.')
     end
 
+    it 'puts the request ID before the permission to check' do
+      stub_delete(status: 403, body: graph_failure('ErrorAccessDenied', 'Access is denied.').to_json,
+                  headers: { 'Content-Type' => 'application/json' })
+      expect { run_action(input) }
+        .to raise_error(IPaaS::Job::FailJob,
+                        'Microsoft Graph returned HTTP 403 ErrorAccessDenied: Access is denied. ' \
+                        "(request-id #{graph_request_id}, date #{graph_request_date}) Microsoft refused mailbox " \
+                        "'#{mailbox}'. Check that the app holds the Calendars.ReadWrite application permission " \
+                        'for this mailbox.')
+    end
+
     # A delete that ran before the pause leaves nothing for the rerun to delete twice, so a server error is
     # safe to pause on, unlike a create without a Transaction ID.
     it 'pauses the step on a server error' do

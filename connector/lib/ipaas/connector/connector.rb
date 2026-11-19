@@ -15,7 +15,7 @@ module IPaaS
     #  * action (IPaaS::Connector::ActionTemplate, multiple allowed)
     class Connector
       # The maximum file size iPaaS allows for connectors, above this value they will not be loaded.
-      MAX_SOURCE_FILE_BYTES = 150.kilobytes
+      MAX_SOURCE_FILE_BYTES = 400.kilobytes
 
       extend IPaaS::Connector::Common::ProcRules::ProcSafe
 

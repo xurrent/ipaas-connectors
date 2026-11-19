@@ -106,6 +106,22 @@ describe 'Microsoft Outlook Get Email Action', :action, :microsoft_outlook do
       expect { run_action(input) }.to raise_error(IPaaS::Job::FailJob, /HTTP 403/)
     end
 
+    it 'ends the failure with the request ID Microsoft gave' do
+      stub_message(graph_failure('ErrorInvalidIdMalformed', 'Id is malformed.'), status: 400)
+      expect { run_action(input) }
+        .to raise_error(IPaaS::Job::FailJob,
+                        'Microsoft Graph returned HTTP 400 ErrorInvalidIdMalformed: Id is malformed. ' \
+                        "(request-id #{graph_request_id}, date #{graph_request_date})")
+    end
+
+    it 'puts the request ID after the mailbox it was refused' do
+      stub_message(graph_failure('ErrorAccessDenied', 'Access is denied.'), status: 403)
+      expect { run_action(input) }
+        .to raise_error(IPaaS::Job::FailJob,
+                        "Microsoft Graph returned HTTP 403 ErrorAccessDenied while reading mailbox '#{mailbox}': " \
+                        "Access is denied. (request-id #{graph_request_id}, date #{graph_request_date})")
+    end
+
     # 429 and 503 are the platform default every other connector takes.
     it 'fails rather than rescheduling when Microsoft answers 504' do
       stub_request(:get, message_url).with(query: hash_including({})).to_return(status: 504, body: '')

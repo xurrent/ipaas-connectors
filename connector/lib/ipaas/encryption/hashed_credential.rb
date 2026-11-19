@@ -26,6 +26,8 @@ module IPaaS
       # gone) and keep verifying at this count forever.
       LEGACY_ITERATIONS = 600_000
 
+      HASH_READERS = [:[], :dig, :fetch, :fetch_values, :values_at, :key?, :has_key?].freeze
+
       attr_reader :salt, :hash_value
 
       class << self
@@ -91,6 +93,13 @@ module IPaaS
       def initialize(salt:, hash:)
         @salt = salt
         @hash_value = hash
+      end
+
+      HASH_READERS.each do |reader|
+        define_method(reader) do |*|
+          raise IPaaS::Encryption::Errors::InvalidHashedCredential,
+                "Reading a hashed credential with '#{reader}' is not allowed."
+        end
       end
 
       # Constant-work for ANY candidate (nil/blank treated as "") so timing does not

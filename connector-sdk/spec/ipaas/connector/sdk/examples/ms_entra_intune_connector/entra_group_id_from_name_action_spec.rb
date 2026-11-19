@@ -116,6 +116,17 @@ describe 'Microsoft Entra Group ID from Name Action', :action do
         expect(stub).to have_been_requested.once
       end
 
+      it 'doubles a single quote inside a group name, so Microsoft Graph reads the whole name as one value' do
+        stub = stub_request(:get, generate_expected_url)
+               .with(query: { '$filter': "displayName in ('Mike''s team')", '$select': 'id,displayName' })
+               .to_return(body: { value: [{ id: 'a', displayName: "Mike's team" }] }.to_json)
+
+        output = run_action({ group_names: ["Mike's team"] })
+
+        expect(output[:results].pluck(:group_id)).to contain_exactly('a')
+        expect(stub).to have_been_requested.once
+      end
+
       it 'gets empty when names are not present' do
         stub = stub_request(:get, generate_expected_url)
                .with(query: { '$filter': 'displayName in ()', '$select': 'id,displayName' })

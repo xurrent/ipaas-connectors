@@ -35,6 +35,13 @@ describe IPaaS::Connector::Common::LoadRules::ConnectorShape do
                                                 label: 'spec')
     end
 
+    it 'checks a connector source of exactly 400 KB, the size limit, instead of refusing it as too large' do
+      source = minimal + ('#' * (400.kilobytes - minimal.bytesize))
+
+      expect(source.bytesize).to eq(IPaaS::Connector::Connector::MAX_SOURCE_FILE_BYTES)
+      expect(check(source)).to have_attributes(in_shape?: true, checked?: true, uncheckable: nil)
+    end
+
     it 'accepts every structural position, nested as a connector nests them' do
       source = with_connector_statement(<<~DSL.strip)
         name 'My'

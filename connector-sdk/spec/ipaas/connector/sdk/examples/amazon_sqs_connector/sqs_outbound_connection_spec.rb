@@ -10,7 +10,7 @@ describe 'Amazon SQS Connection', :outbound_connection do
         external_id: 'test-external-id-12345',
       },
       aws_credentials: {
-        role_arn: 'arn:aws:iam::123456789012:role/TestRole',
+        role_arn: 'arn:aws:iam::123456789012:role/XurrentIPaaSTestDelegatedAccessRole',
         region: 'us-east-1',
       },
     }
@@ -36,13 +36,31 @@ describe 'Amazon SQS Connection', :outbound_connection do
       expect(outbound_connection).not_to be_valid, outbound_connection.full_error_messages
     end
 
-    it 'accepts valid role_arn with special characters' do
-      outbound_connection_config[:aws_credentials][:role_arn] = 'arn:aws:iam::123456789012:role/ValidRole+With=Chars'
+    it 'accepts role_arn with an empty name between the required prefix and suffix' do
+      outbound_connection_config[:aws_credentials][:role_arn] =
+        'arn:aws:iam::123456789012:role/XurrentIPaaSDelegatedAccessRole'
       expect(outbound_connection).to be_valid, outbound_connection.full_error_messages
     end
 
+    {
+      'an arbitrary role name' => 'TestRole',
+      'a name without the XurrentIPaaS prefix' => 'SqsDelegatedAccessRole',
+      'a name without the DelegatedAccessRole suffix' => 'XurrentIPaaSSqsRole',
+      'a lowercase prefix' => 'xurrentipaasSqsDelegatedAccessRole',
+      'special characters in the name' => 'XurrentIPaaSSqs+=,.@_-DelegatedAccessRole',
+      'an IAM path' => 'team/XurrentIPaaSSqsDelegatedAccessRole',
+      'trailing characters after the suffix' => 'XurrentIPaaSSqsDelegatedAccessRoleX',
+    }.each do |description, role_name|
+      it "rejects role_arn with #{description}" do
+        outbound_connection_config[:aws_credentials][:role_arn] = "arn:aws:iam::123456789012:role/#{role_name}"
+        expect(outbound_connection).not_to be_valid
+        expect(outbound_connection.full_error_messages).to include("Field 'role_arn' should confirm to pattern")
+      end
+    end
+
     it 'rejects role_arn with invalid account ID' do
-      outbound_connection_config[:aws_credentials][:role_arn] = 'arn:aws:iam::invalid:role/TestRole'
+      outbound_connection_config[:aws_credentials][:role_arn] =
+        'arn:aws:iam::invalid:role/XurrentIPaaSTestDelegatedAccessRole'
       expect(outbound_connection).not_to be_valid
     end
 

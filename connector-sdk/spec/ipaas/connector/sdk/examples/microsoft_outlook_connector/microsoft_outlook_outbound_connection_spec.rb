@@ -31,7 +31,7 @@ describe 'Microsoft Outlook Connection', :outbound_connection, :microsoft_outloo
   end
 
   def graph_response(status, body)
-    double(status: status, body: body)
+    double(status: status, body: body, headers: {})
   end
 
   describe 'cloud' do
@@ -1428,6 +1428,22 @@ describe 'Microsoft Outlook Connection', :outbound_connection, :microsoft_outloo
       stub_request(:get, inbox_url).to_return(status: 500, body: 'boom')
       expect(outbound_connection.config_tester).to eq({ status: :error,
                                                         message: 'Microsoft Graph returned HTTP 500 : boom', })
+    end
+
+    it 'reports failed with the request ID Microsoft gave' do
+      stub_request(:get, inbox_url)
+        .to_return(status: 403, body: graph_failure('ErrorAccessDenied', 'Access is denied.').to_json)
+      expect(outbound_connection.config_tester)
+        .to eq({ status: :failed, message: 'Microsoft Graph returned HTTP 403 ErrorAccessDenied: Access is denied. ' \
+                                           "(request-id #{graph_request_id}, date #{graph_request_date})", })
+    end
+
+    it 'reports error with the request ID Microsoft gave' do
+      stub_request(:get, inbox_url)
+        .to_return(status: 500, body: graph_failure('InternalServerError', 'Something went wrong.').to_json)
+      expect(outbound_connection.config_tester)
+        .to eq({ status: :error, message: 'Microsoft Graph returned HTTP 500 InternalServerError: Something went ' \
+                                          "wrong. (request-id #{graph_request_id}, date #{graph_request_date})", })
     end
 
     it 'reports failed with Microsoft own words when it refuses the client secret' do

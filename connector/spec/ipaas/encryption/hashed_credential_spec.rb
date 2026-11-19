@@ -136,6 +136,16 @@ describe IPaaS::Encryption::HashedCredential do
     end
   end
 
+  describe 'reading it like a Hash' do
+    it 'refuses every hash reader with InvalidHashedCredential' do
+      [:[], :dig, :fetch, :fetch_values, :values_at, :key?, :has_key?].each do |reader|
+        expect { credential.public_send(reader, :account_id) }
+          .to raise_error(IPaaS::Encryption::Errors::InvalidHashedCredential,
+                          "Reading a hashed credential with '#{reader}' is not allowed.")
+      end
+    end
+  end
+
   describe 'value equality' do
     it 'is equal for identical salt/hash but not for two derivations of the same plaintext' do
       same = described_class.new(salt: credential.salt, hash: credential.hash_value)

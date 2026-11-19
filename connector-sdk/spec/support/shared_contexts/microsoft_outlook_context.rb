@@ -29,6 +29,13 @@ shared_context 'microsoft outlook', :microsoft_outlook do
     }.merge(overrides)
   end
 
+  let(:graph_request_id) { 'a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d' }
+  let(:graph_request_date) { '2026-11-04T18:20:00' }
+
+  def graph_failure(code, message, inner_error: { 'request-id' => graph_request_id, 'date' => graph_request_date })
+    { error: { code: code, message: message, innerError: inner_error }.compact }
+  end
+
   def expect_reschedule_after(seconds, message = nil, &step)
     Timecop.freeze do
       expect(&step).to raise_error(IPaaS::Job::RescheduleJob, message) do |error|

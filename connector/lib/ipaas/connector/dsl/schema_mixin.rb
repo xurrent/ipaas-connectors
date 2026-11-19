@@ -87,7 +87,6 @@ module IPaaS
               required: false, pattern: nil,
               min: nil, max: nil, min_length: nil, max_length: nil, min_date: nil, max_date: nil,
               validator: nil, enumeration: nil, fields: nil, remove_unmapped_fields: true, &block|
-
               if id.is_a?(IPaaS::Connector::Schema::Field)
                 self._fields << IPaaS::Connector::Types::SchemaFieldType.resolve(id.to_h_ref).tap do |field|
                   owned_by(field, own_connector)

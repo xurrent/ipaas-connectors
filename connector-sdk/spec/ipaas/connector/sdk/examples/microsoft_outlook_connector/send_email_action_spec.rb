@@ -154,6 +154,52 @@ describe 'Microsoft Outlook Send Email Action', :action, :microsoft_outlook do
     end
   end
 
+  describe 'the Microsoft request ID it reports' do
+    let(:refusal) { 'Microsoft Graph returned HTTP 403 ErrorAccessDenied: Access is denied.' }
+
+    def stub_refusal(body, headers: {})
+      stub_request(:post, send_url)
+        .to_return(status: 403, body: body.to_json, headers: headers.merge('Content-Type' => 'application/json'))
+    end
+
+    it 'ends the failure with the request ID and the date Microsoft gave' do
+      stub_refusal(graph_failure('ErrorAccessDenied', 'Access is denied.'))
+      expect { run_action(input) }
+        .to raise_error(IPaaS::Job::FailJob,
+                        "#{refusal} (request-id #{graph_request_id}, date #{graph_request_date})")
+    end
+
+    it 'reads the request ID under the innererror spelling too' do
+      stub_refusal({ error: { code: 'ErrorAccessDenied', message: 'Access is denied.',
+                              innererror: { 'request-id' => graph_request_id }, } })
+      expect { run_action(input) }.to raise_error(IPaaS::Job::FailJob, "#{refusal} (request-id #{graph_request_id})")
+    end
+
+    it 'takes the request ID from the response header when the body carries none' do
+      stub_refusal(graph_failure('ErrorAccessDenied', 'Access is denied.', inner_error: nil),
+                   headers: { 'Request-Id' => graph_request_id })
+      expect { run_action(input) }.to raise_error(IPaaS::Job::FailJob, "#{refusal} (request-id #{graph_request_id})")
+    end
+
+    it 'prefers the request ID in the body over the one in the header' do
+      stub_refusal(graph_failure('ErrorAccessDenied', 'Access is denied.', inner_error: { 'request-id' => 'body-id' }),
+                   headers: { 'request-id' => 'header-id' })
+      expect { run_action(input) }.to raise_error(IPaaS::Job::FailJob, "#{refusal} (request-id body-id)")
+    end
+
+    it 'falls back to the header when the body names the request ID blank' do
+      stub_refusal(graph_failure('ErrorAccessDenied', 'Access is denied.', inner_error: { 'request-id' => '' }),
+                   headers: { 'request-id' => graph_request_id })
+      expect { run_action(input) }.to raise_error(IPaaS::Job::FailJob, "#{refusal} (request-id #{graph_request_id})")
+    end
+
+    it 'falls back to the header when innerError is not an object' do
+      stub_refusal(graph_failure('ErrorAccessDenied', 'Access is denied.', inner_error: 'unexpected'),
+                   headers: { 'request-id' => graph_request_id })
+      expect { run_action(input) }.to raise_error(IPaaS::Job::FailJob, "#{refusal} (request-id #{graph_request_id})")
+    end
+  end
+
   describe 'what it refuses before it calls Microsoft' do
     it 'refuses an address wrapped in a display name, and sends nothing' do
       stub_send

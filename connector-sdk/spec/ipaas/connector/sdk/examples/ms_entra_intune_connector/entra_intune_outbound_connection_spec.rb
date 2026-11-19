@@ -1,6 +1,6 @@
 require 'spec_helper'
 
-describe 'Microsoft Entra and Intune Connection', :outbound_connection do
+describe 'Microsoft Intune Connection', :outbound_connection do
   let(:connector_id) { '01983ca8-546f-7610-93c9-c6cc164300fc' }
 
   let(:outbound_connection_config) do
@@ -11,6 +11,10 @@ describe 'Microsoft Entra and Intune Connection', :outbound_connection do
         client_secret: make_secret_string('def'),
       },
     }
+  end
+
+  it 'belongs to the connector named Microsoft Intune' do
+    expect(outbound_connection.connector.name).to eq('Microsoft Intune')
   end
 
   describe 'validation' do
@@ -46,7 +50,7 @@ describe 'Microsoft Entra and Intune Connection', :outbound_connection do
     before(:each) do
       outbound_connection.config[:environment] = {
         oauth2_endpoint: 'https://oauth.xurrent-test.com',
-        graphql_endpoint: 'https://graph.xurrent-test.com/',
+        graph_endpoint: 'https://graph.xurrent-test.com/',
       }
     end
 

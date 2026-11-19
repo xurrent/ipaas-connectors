@@ -7,7 +7,7 @@ describe 'Amazon SQS Send Message Action', :action do
   let(:outbound_connection_config) do
     {
       aws_credentials: {
-        role_arn: 'arn:aws:iam::123456789012:role/TestRole',
+        role_arn: 'arn:aws:iam::123456789012:role/XurrentIPaaSTestDelegatedAccessRole',
         region: 'us-east-1',
       },
     }
@@ -150,7 +150,7 @@ describe 'Amazon SQS Send Message Action', :action do
     def sts_assume_role_params
       {
         'Action' => 'AssumeRole',
-        'RoleArn' => 'arn:aws:iam::123456789012:role/TestRole',
+        'RoleArn' => 'arn:aws:iam::123456789012:role/XurrentIPaaSTestDelegatedAccessRole',
         'RoleSessionName' => 'XurrentIPaaSSession',
         'ExternalId' => 'test-external-id-12345',
         'Version' => '2011-06-15',

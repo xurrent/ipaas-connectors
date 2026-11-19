@@ -424,7 +424,7 @@ describe 'Microsoft Intune Managed Devices Action', :action do
         end
 
         it 'uses iteration_state_value' do
-          old_next_link = 'https://foo/baz'
+          old_next_link = "#{endpoint}/next-page"
           stub = stub_request(:get, old_next_link)
                  .with(query: nil)
                  .to_return(body: {
@@ -443,6 +443,14 @@ describe 'Microsoft Intune Managed Devices Action', :action do
           expect(output[:has_next_page]).to eq(false)
           expect(output[:devices].pluck(:device_id)).to contain_exactly('2d6')
           expect(stub).to have_been_requested.once
+        end
+
+        it 'refuses a stored next page link on another host and sends it nothing' do
+          foreign_link = 'https://elsewhere.example.com/v1/next-page'
+          action(last_sync: nil).send(:iteration_state_value=, { odata_nextLink: foreign_link })
+
+          expect { run_action }.to raise_error(IPaaS::Job::FailJob, /next page link that is not on/)
+          expect(a_request(:any, /elsewhere\.example\.com/)).not_to have_been_made
         end
       end
     end

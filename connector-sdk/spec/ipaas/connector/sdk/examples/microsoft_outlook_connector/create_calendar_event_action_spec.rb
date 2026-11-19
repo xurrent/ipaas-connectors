@@ -300,6 +300,59 @@ describe 'Microsoft Outlook Create Calendar Event Action', :action, :microsoft_o
     end
   end
 
+  describe 'the Microsoft request ID it reports' do
+    let(:reference) { " (request-id #{graph_request_id}, date #{graph_request_date})" }
+
+    def stub_refusal(status, code, message, url: events_url)
+      stub_create(url: url, status: status, body: graph_failure(code, message).to_json)
+    end
+
+    it 'ends the Transaction ID refusal with the request ID' do
+      stub_refusal(400, 'ErrorDuplicateTransactionId', 'The TransactionId has already been used.')
+      expect { run_action(input(transaction_id: 'delivery-7f3c')) }
+        .to raise_error(IPaaS::Job::FailJob) { |error| expect(error.message).to end_with("next.#{reference}") }
+    end
+
+    it 'ends the time zone refusal with the request ID' do
+      stub_refusal(400, 'TimeZoneNotSupportedException', "A valid TimeZone value must be specified. 'Bern'.")
+      expect { run_action(input(time_zone: 'Bern')) }
+        .to raise_error(IPaaS::Job::FailJob,
+                        "Microsoft does not know the time zone 'Bern'. Use a Windows name such as W. Europe " \
+                        "Standard Time or an IANA name such as Europe/Zurich.#{reference}")
+    end
+
+    it 'ends the refused property message with the request ID' do
+      stub_refusal(400, 'ErrorPropertyValidationFailure', 'At least one property failed validation.')
+      expect { run_action(input(start_time: '2027-03-28 02:30', end_time: '2027-03-28 03:00')) }
+        .to raise_error(IPaaS::Job::FailJob) { |error| expect(error.message).to end_with("Start after End.#{reference}") }
+    end
+
+    it 'ends the missing calendar message with the request ID' do
+      stub_refusal(404, 'ErrorItemNotFound', 'The specified object was not found in the store.',
+                   url: calendar_events_url)
+      expect { run_action(input(calendar_id: calendar_id)) }
+        .to raise_error(IPaaS::Job::FailJob) { |error| expect(error.message).to end_with("calendar.#{reference}") }
+    end
+
+    it 'names the request ID once, before the hint, on a server error with no Transaction ID' do
+      stub_refusal(503, 'ServiceUnavailable', 'Server is busy.')
+      expect { run_action(input) }
+        .to raise_error(IPaaS::Job::FailJob,
+                        "Microsoft Graph returned HTTP 503 ServiceUnavailable: Server is busy.#{reference} " \
+                        'Microsoft may have created the event before it failed, so look in the calendar before you ' \
+                        'run the step again, or map a Transaction ID.')
+    end
+
+    it 'names the request ID once, before the permission to check, when Microsoft refuses the mailbox' do
+      stub_refusal(403, 'ErrorAccessDenied', 'Access is denied.')
+      expect { run_action(input) }
+        .to raise_error(IPaaS::Job::FailJob,
+                        "Microsoft Graph returned HTTP 403 ErrorAccessDenied: Access is denied.#{reference} " \
+                        "Microsoft refused mailbox '#{mailbox}'. Check that the app holds the Calendars.ReadWrite " \
+                        'application permission for this mailbox.')
+    end
+  end
+
   describe 'what it refuses before it calls Microsoft' do
     before { stub_request(:post, /events/) }
 

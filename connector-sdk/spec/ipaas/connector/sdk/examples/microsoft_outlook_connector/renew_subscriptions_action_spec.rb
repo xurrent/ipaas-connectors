@@ -212,6 +212,21 @@ describe 'Microsoft Outlook Renew Subscriptions Action', :action, :microsoft_out
                                        'the trigger')
     end
 
+    it 'logs the request ID of a create Microsoft refused, before the reason it gives' do
+      store(runbook_id => row(id: nil))
+      stub_list
+      stub_create(status: 400, body: graph_failure('ValidationError', 'Subscription validation request failed.'))
+      logged = record_log
+      expect { run_action({}) }.to raise_error(IPaaS::Job::FailJob, run_failed)
+      expect(logged.string).to include("#{mail_resource} for #{runbook_id}: Microsoft did not create the " \
+                                       'subscription. Microsoft Graph returned HTTP 400 ValidationError: ' \
+                                       'Subscription validation request failed. ' \
+                                       "(request-id #{graph_request_id}, date #{graph_request_date}) " \
+                                       'Microsoft checks that it can reach the trigger before it checks anything ' \
+                                       'else, so it reports an iPaaS it cannot reach, a runbook that is not ' \
+                                       'deployed and a wrong mailbox or folder alike.')
+    end
+
     it 'fails the row when Microsoft answers a create with no subscription id' do
       store(runbook_id => row(id: nil))
       stub_list
@@ -322,6 +337,18 @@ describe 'Microsoft Outlook Renew Subscriptions Action', :action, :microsoft_out
       expect(stored_rows[runbook_id]['expires_at']).to eq(soon)
       expect(logged.string).to include("#{mail_resource} for #{runbook_id}: Microsoft Graph returned HTTP 403 " \
                                        'ErrorAccessDenied: Access is denied.')
+    end
+
+    it 'logs the request ID of a renewal Microsoft refused' do
+      store(runbook_id => row)
+      stub_list(held(subscription_id))
+      batch_answers[subscription_id] = { status: 403, body: graph_failure('ErrorAccessDenied', 'Access is denied.') }
+      stub_batch
+      logged = record_log
+      expect { run_action({}) }.to raise_error(IPaaS::Job::FailJob, run_failed)
+      expect(logged.string).to include("#{mail_resource} for #{runbook_id}: Microsoft Graph returned HTTP 403 " \
+                                       'ErrorAccessDenied: Access is denied. ' \
+                                       "(request-id #{graph_request_id}, date #{graph_request_date})")
     end
 
     it 'renews a subscription whose stored expiry cannot be read' do
@@ -623,6 +650,18 @@ describe 'Microsoft Outlook Renew Subscriptions Action', :action, :microsoft_out
       expect { run_action({}) }.to raise_error(IPaaS::Job::FailJob, run_failed)
       expect(logged.string).to include("#{mail_resource} for #{runbook_id}: Microsoft Graph returned HTTP 403 " \
                                        'ErrorAccessDenied')
+    end
+
+    it 'logs the request ID of a delete Microsoft refused' do
+      store(runbook_id => row(expires_at: later))
+      stub_list(held(subscription_id), held(other_subscription_id))
+      stub_delete(other_subscription_id, status: 403,
+                                         body: graph_failure('ErrorAccessDenied', 'Access is denied.').to_json)
+      logged = record_log
+      expect { run_action({}) }.to raise_error(IPaaS::Job::FailJob, run_failed)
+      expect(logged.string).to include("#{mail_resource} for #{runbook_id}: Microsoft Graph returned HTTP 403 " \
+                                       'ErrorAccessDenied: Access is denied. ' \
+                                       "(request-id #{graph_request_id}, date #{graph_request_date})")
     end
 
     it 'fails the run at once when the credentials stop working before a delete, instead of failing the row' do

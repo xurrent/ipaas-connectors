@@ -10,7 +10,7 @@ class AmazonSqsConnector < IPaaS::Connector::Definition
 
       To use this connector, you need:
       * An AWS account with SQS access
-      * An IAM role with SQS permissions
+      * An IAM role with SQS permissions, named as described in Step 2
       * Our AWS Account ID (see 'AWS Account ID' in the 'Setup Information' section below)
       * External ID: Generated automatically during connection setup
 
@@ -48,7 +48,9 @@ class AmazonSqsConnector < IPaaS::Connector::Definition
       3. Enter the **AWS Account ID** shown in the 'Setup Information' section below as AWS Account ID.
       4. Check "Require external ID" and enter the **External ID** shown in the 'Setup Information' section below
       5. Attach the policy created in Step 1
-      6. Complete role creation and copy the **Role ARN**
+      6. Name the role `XurrentIPaaS<Name>DelegatedAccessRole`, where `<Name>` consists of letters and digits only,
+         for example `XurrentIPaaSSqsDelegatedAccessRole`. Do not place the role on an IAM path.
+      7. Complete role creation and copy the **Role ARN**
 
       ## Step 3: Configure Connection
 
@@ -118,8 +120,9 @@ class AmazonSqsConnector < IPaaS::Connector::Definition
           field :role_arn, 'IAM Role ARN', :string,
                 required: true,
                 hint: 'After creating the IAM role in your AWS account, paste the Role ARN here. ' \
-                      'Example: arn:aws:iam::123456789012:role/YourRoleName',
-                pattern: %r{\Aarn:aws:iam::\d{12}:role/[\w+=,.@-]+\z}
+                      'The role name must start with XurrentIPaaS and end with DelegatedAccessRole. ' \
+                      'Example: arn:aws:iam::123456789012:role/XurrentIPaaSSqsDelegatedAccessRole',
+                pattern: %r{\Aarn:aws:iam::\d{12}:role/XurrentIPaaS[A-Za-z0-9]*DelegatedAccessRole\z}
 
           field :region, 'AWS Region', :string,
                 required: true,
