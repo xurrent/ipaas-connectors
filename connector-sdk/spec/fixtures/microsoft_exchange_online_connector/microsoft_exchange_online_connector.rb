@@ -71,7 +71,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
   USER_MAILBOX_TYPE   = 'UserMailbox'.freeze
   ACTIVE_ARCHIVE      = 'Active'.freeze
   # An unlicensed shared mailbox holds at most 50 GB; above that it needs a licence of its own.
-  SHARED_MAILBOX_LIMIT_BYTES = 50 * 1024 * 1024 * 1024
+  SHARED_MAILBOX_LIMIT_BYTES = 53_687_091_200 # 50 GiB
   ITEM_SIZE_BYTES_PATTERN    = /\(([\d,.\s]+) bytes\)/
   CLOSED_JOIN_RESTRICTION    = 'Closed'.freeze
 
@@ -108,11 +108,9 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
   GRAPH_TIME_FORMAT         = '%Y-%m-%dT%H:%M:%S'.freeze
   GRAPH_TIME_ZONE           = 'UTC'.freeze
 
-  AVATAR = '/assets/icons/microsoft-exchange-online.svg'.freeze
-
   connector '01a1f2c3-0276-7a6d-88ab-3d9d74512014' do
     name 'Microsoft Exchange Online'
-    avatar AVATAR
+    avatar '/assets/icons/microsoft-exchange-online.svg'
     description <<~END_OF_DESCRIPTION
       ## Overview
       Runs Exchange Online administration from a runbook: mailbox access (Full Access, Send As, Send on Behalf, calendar delegates), distribution list membership, shared mailboxes, mail forwarding, automatic replies, address list visibility, email aliases and litigation hold.
@@ -217,7 +215,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-0279-7d47-9565-a937427dd458' do
       name 'Grant shared mailbox Full Access'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Gives a user Full Access to a mailbox, with optional auto-mapping so the mailbox appears in the user's Outlook. Action library EXO-001, tier T2. Undo with Remove shared mailbox Full Access.
 
@@ -256,7 +254,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-027b-7ef9-8990-ccb8b03904eb' do
       name 'Remove shared mailbox Full Access'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Takes a user's Full Access permission off a mailbox. Action library EXO-002, tier T1. Undo with Grant shared mailbox Full Access.
 
@@ -294,7 +292,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-027e-7153-9f6d-ecb2c8a560cd' do
       name 'Grant Send As'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Lets a user send mail as a mailbox or group, so the message shows the mailbox as its sender. Action library EXO-003, tier T2. Undo with Remove Send As.
 
@@ -331,7 +329,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-0280-7471-9ac6-d5e0b9808eff' do
       name 'Remove Send As'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Takes a user's Send As permission off a mailbox or group. Action library EXO-004, tier T1. Undo with Grant Send As.
 
@@ -368,7 +366,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-0283-7a28-a20d-7151e9003538' do
       name 'Grant Send on Behalf'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Lets a user send on behalf of a mailbox; recipients see "user on behalf of mailbox". Typical for executive assistants. Action library EXO-005, tier T2.
 
@@ -407,7 +405,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-0285-7f9d-96c4-3b6ffa0cd5ad' do
       name 'Add member to distribution list'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Adds a user to a distribution list or mail-enabled security group. Microsoft Graph cannot change their membership, so this runs Add-DistributionGroupMember. Action library EXO-006, tier T1. Undo with Remove member from distribution list.
 
@@ -459,7 +457,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-0288-7626-b93b-25a8f0608152' do
       name 'Remove member from distribution list'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Removes a user from a distribution list or mail-enabled security group. Action library EXO-007, tier T1. Undo with Add member to distribution list.
 
@@ -498,7 +496,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-028a-71f2-95e8-12d120e87bed' do
       name 'Create shared mailbox'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Creates a shared mailbox and gives each owner Full Access with auto-mapping. Action library EXO-008, tier T2.
 
@@ -561,7 +559,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-028c-7e7f-bcbe-18649dceec02' do
       name 'Convert mailbox to shared'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Converts a user mailbox to a shared mailbox, so a leaver's mail is kept without a licence. Action library EXO-009, tier T3. Run it before the licence is removed: removing an Exchange licence deletes the mailbox's data after 30 days.
 
@@ -611,7 +609,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-028f-7dd1-8674-5b535937d270' do
       name 'Set mail forwarding'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Forwards a mailbox's mail to another address in the organization, for example a leaver's mail to their manager. Action library EXO-010, tier T3.
 
@@ -661,7 +659,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-0291-76fa-936f-5446fad43616' do
       name 'Set automatic replies'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Turns a mailbox's automatic replies (out of office) on, schedules them, or turns them off. Calls Microsoft Graph directly and needs the MailboxSettings.ReadWrite permission. Action library EXO-011, tier T2.
 
@@ -725,7 +723,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-0294-7e3d-9944-974c8aad81e5' do
       name 'Hide from address list'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Hides a mailbox from the global address list, or shows it again. Typical for a leaver. Action library EXO-012, tier T2.
 
@@ -764,7 +762,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-0296-72c4-a69e-0d7cfcaed557' do
       name 'Grant calendar delegate access'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Gives a user access to a mailbox's calendar, for example an assistant to a manager's calendar. Action library EXO-013, tier T2; the mailbox owner approves.
 
@@ -829,7 +827,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-0299-7db0-9ea4-2dc1de74b7ef' do
       name 'Add email alias'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Adds a secondary SMTP address to a mailbox, for example after a name change. The primary address stays as it is. Action library EXO-014, tier T2.
 
@@ -879,7 +877,7 @@ class MicrosoftExchangeOnlineConnector < IPaaS::Connector::Definition
 
     action '01a1f2c3-029b-71e5-95cc-bb9dabb2aafa' do
       name 'Enable litigation hold'
-      avatar AVATAR
+      avatar '/assets/icons/microsoft-exchange-online.svg'
       description <<~END_OF_DESCRIPTION
         Places a mailbox on litigation hold, so nothing in it can be purged, for a number of days or without end. Action library EXO-015, tier T3; needs legal approval, and Exchange Online Plan 2 or an E3 or higher licence on the mailbox.
 
